@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Вспомогательная функция для проверки авторизации
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Пользователь может читать, создавать, обновлять и удалять только свои собственные данные
+    match /users/{userId} {
+      match /words/{wordId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+      match /groups/{groupId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+  }
+}
