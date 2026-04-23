@@ -4,28 +4,33 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Layers, PlayCircle, Settings, Plus, X, Search, CheckCircle2,
-  XCircle, ArrowRight, Brain, Timer, Type, FlipHorizontal, Check, Loader2, BookOpen, Trash2, FolderPlus, ArrowLeft, Edit3, XOctagon
+  Layers, PlayCircle, Settings, Plus, X, CheckCircle2, XCircle, 
+  ArrowRight, Brain, Timer, Type, FlipHorizontal, Check, Loader2, 
+  BookOpen, Trash2, FolderPlus, ArrowLeft, Edit3, XOctagon, Apple, AlertTriangle
 } from 'lucide-react';
 import { auth, db } from './firebase';
-import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, User } from 'firebase/auth';
+import { 
+  onAuthStateChanged, signInWithPopup, GoogleAuthProvider, OAuthProvider, 
+  signOut, deleteUser, User 
+} from 'firebase/auth';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 // --- TYPES ---
-export type Category = 'general' | 'collocation' | 'idiom';
-
-export interface Translation {
+export interface Example {
   text: string;
-  examples: string[];
+  translation: string;
 }
 
 export interface Word {
   id: string;
   original: string;
-  translations: Translation[];
-  category: Category;
+  translation: string;
+  cambridgeTranslation: string;
+  transcriptionUK: string;
+  transcriptionUS: string;
+  examples: Example[];
   groupIds: string[];
   createdAt: number;
   correctAnswers: number;
@@ -36,29 +41,25 @@ export interface Word {
 export interface Group {
   id: string;
   name: string;
-  category: Category;
 }
 
-// --- API CLIENT (NETLIFY FUNCTION) ---
+export const LEVELS = ["Beginner", "Elementary", "Pre-Intermediate", "Intermediate", "Upper-Intermediate", "Advanced"];
+
+// --- API CLIENT ---
 class ApiClient {
   static BASE_URL = '/.netlify/functions';
 
-  static async aiGenerateTranslations(word: string, category: Category, level?: string): Promise<Translation[]> {
+  static async aiGenerateWord(word: string, level?: string): Promise<Partial<Word>> {
     try {
       const res = await fetch(`${this.BASE_URL}/ai`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'translate', word, category, level })
+        body: JSON.stringify({ action: 'translate', word, level })
       });
-      if (!res.ok) {
-         if (res.status === 404 && (window.location.hostname.includes('run.app') || window.location.hostname.includes('localhost'))) {
-            return [{ text: `[ДЕМО] Перевод для "${word}"`, examples: [`(Разверните проект для реального ИИ)`] }];
-         }
-         throw new Error(`Ошибка API: ${res.status}`);
-      }
+      if (!res.ok) throw new Error('API Error');
       return await res.json();
-    } catch(e: any) {
-      return [{ text: `${word} (Ошибка)`, examples: [e.message] }];
+    } catch(e) {
+      return { translation: `${word} (Ошибка ИИ)`, examples: [] };
     }
   }
 
@@ -69,11 +70,10 @@ class ApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'distractors', word, correctTranslation })
       });
-      if (!res.ok) return ['Случайное слово', 'Ошибочный ответ', 'Другой вариант'];
-      const data = await res.json();
-      return Array.isArray(data) ? data : ['Случайное', 'Ошибочный', 'Другой'];
+      if (!res.ok) return ['Вариант 1', 'Вариант 2', 'Вариант 3'];
+      return await res.json();
     } catch(e) {
-      return ['Случайное слово', 'Ошибочный ответ', 'Другой вариант'];
+      return ['Случайное', 'Ошибочный', 'Другой'];
     }
   }
 
@@ -92,85 +92,46 @@ class ApiClient {
   }
 }
 
-// --- MOCK DATA ---
-const INITIAL_WORDS: Word[] = [
-  {
-    id: 'w1', original: 'Resilient', category: 'general', groupIds: ['g1'], createdAt: Date.now(),
-    translations: [{ text: 'Устойчивый / Жизнерадостный', examples: ['He was resilient after the failure.'] }],
-    correctAnswers: 2, incorrectAnswers: 0, masteryLevel: 40
-  },
-  {
-    id: 'w2', original: 'Ubiquitous', category: 'general', groupIds: ['g1'], createdAt: Date.now(),
-    translations: [{ text: 'Вездесущий', examples: ['Smartphones have become ubiquitous.'] }],
-    correctAnswers: 0, incorrectAnswers: 1, masteryLevel: 0
-  },
-  {
-    id: 'w3', original: 'Make up your mind', category: 'collocation', groupIds: [], createdAt: Date.now() - 1000,
-    translations: [{ text: 'Принять решение', examples: ['Please make up your mind.'] }],
-    correctAnswers: 5, incorrectAnswers: 1, masteryLevel: 80
-  }
-];
-
-const INITIAL_GROUPS: Group[] = [
-  { id: 'g1', name: 'Сложные слова Toefl', category: 'general' },
-  { id: 'g2', name: 'Идиомы здоровья', category: 'idiom' }
-];
-
 // --- MAIN APP SHELL ---
 export default function AppWrapper() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
 
   useEffect(() => {
-    // Проверка результата после редиректа - нужна для некоторых мобильных браузеров 
-    getRedirectResult(auth).catch((error) => {
-      console.error("Login redirect error:", error);
-    });
-
     const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
     return () => unsubscribe();
   }, []);
 
-  const handleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      // Пробуем войти через всплывающее окно
-      await signInWithPopup(auth, provider);
-    } catch (error: any) {
-      console.error("Login route error:", error);
-      
-      if (error.code === 'auth/unauthorized-domain') {
-        alert("ОШИБКА ДОМЕНА: Ваш сайт на Netlify не добавлен в белый список Firebase! Зайдите в Firebase Console -> Authentication -> Settings -> Authorized domains и добавьте ваш адрес от Netlify.");
-      } else if (error.code === 'auth/popup-blocked') {
-        alert("ОШИБКА: Браузер заблокировал вплывающее окно. Пожалуйста, разрешите всплывающие окна для этого сайта.");
-      } else if (error.message && error.message.includes('403')) {
-        alert("ОШИБКА 403: Вы пытаетесь войти во встроенном окне (фрейме). Откройте сайт в отдельной полноэкранной вкладке.");
-      } else {
-        alert("ОШИБКА ВХОДА: " + (error.message || error.code || "Неизвестная ошибка. Проверьте консоль F12."));
-      }
-    }
+  const handleLoginGoogle = async () => {
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
+    catch (error: any) { alert("Ошибка Google: " + error.message); }
+  };
+
+  const handleLoginApple = async () => {
+    try { await signInWithPopup(auth, new OAuthProvider('apple.com')); } 
+    catch (error: any) { alert("Ошибка Apple: " + error.message); }
   };
 
   if (user === undefined) {
-    return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-800 font-bold">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500 mr-2" /> Загрузка...
+    return <div className="min-h-screen flex items-center justify-center bg-[#F7F7F5] text-stone-800 font-bold">
+        <Loader2 className="w-8 h-8 animate-spin text-teal-600 mr-2" />
     </div>;
   }
 
   if (!user) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50">
-        <BookOpen className="w-16 h-16 text-blue-500 mb-6" />
-        <h1 className="text-4xl font-black mb-2 text-center text-slate-900">Words</h1>
-        <p className="text-slate-500 text-center mb-10 max-w-sm">
-          Изучайте слова и синхронизируйте их на всех устройствах. Для продолжения войдите в аккаунт.
-        </p>
-        <button 
-          onClick={handleLogin} 
-          className="w-full max-w-sm py-4 bg-white border border-slate-200 text-slate-800 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-3 active:scale-95 transition-transform hover:bg-slate-50"
-        >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="G" /> 
-          Войти через Google
-        </button>
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#F7F7F5]">
+        <div className="bg-white/60 p-8 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl border border-white/60 w-full max-w-sm flex flex-col items-center">
+           <BookOpen className="w-16 h-16 text-teal-600 mb-6" />
+           <h1 className="text-4xl font-black mb-2 text-center text-stone-800">ZenWords</h1>
+           <p className="text-stone-500 text-center mb-10 text-sm">Погрузитесь в спокойное изучение языков.</p>
+           
+           <button onClick={handleLoginGoogle} className="w-full mb-4 py-4 bg-white border border-stone-100 text-stone-800 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-3 active:scale-95 transition-transform">
+             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="G" /> Google
+           </button>
+           <button onClick={handleLoginApple} className="w-full py-4 bg-stone-900 text-white font-bold rounded-2xl shadow-sm flex items-center justify-center gap-3 active:scale-95 transition-transform">
+             <Apple className="w-6 h-6" /> Apple ID
+           </button>
+        </div>
       </div>
     );
   }
@@ -180,28 +141,25 @@ export default function AppWrapper() {
 
 function MainApp({ user }: { user: User }) {
   const [activeTab, setActiveTab] = useState<'dict' | 'groups' | 'train' | 'settings'>('dict');
-  const [dictCategory, setDictCategory] = useState<Category>('general');
   const [words, setWords] = useState<Word[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [userProfile, setUserProfile] = useState<{ level: string, onboarded: boolean } | null>(null);
+  const [isProfileLoaded, setIsProfileLoaded] = useState(false);
 
   useEffect(() => {
     const wordsRef = collection(db, 'users', user.uid, 'words');
     const groupsRef = collection(db, 'users', user.uid, 'groups');
     const profileRef = doc(db, 'users', user.uid, 'profile', 'data');
 
-    const unsubWords = onSnapshot(wordsRef, snap => {
-       setWords(snap.docs.map(d => ({ id: d.id, ...d.data() } as Word)));
-    });
-    const unsubGroups = onSnapshot(groupsRef, snap => {
-       setGroups(snap.docs.map(d => ({ id: d.id, ...d.data() } as Group)));
-    });
+    const unsubWords = onSnapshot(wordsRef, snap => setWords(snap.docs.map(d => ({ id: d.id, ...d.data() } as Word))));
+    const unsubGroups = onSnapshot(groupsRef, snap => setGroups(snap.docs.map(d => ({ id: d.id, ...d.data() } as Group))));
     const unsubProfile = onSnapshot(profileRef, snap => {
        if (snap.exists()) {
           setUserProfile(snap.data() as any);
        } else {
-          setUserProfile({ level: 'Beginner', onboarded: false });
+          setUserProfile({ level: 'Intermediate', onboarded: false });
        }
+       setIsProfileLoaded(true);
     });
 
     return () => { unsubWords(); unsubGroups(); unsubProfile(); };
@@ -210,64 +168,83 @@ function MainApp({ user }: { user: User }) {
   const [selectedWordIds, setSelectedWordIds] = useState<Set<string>>(new Set());
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
 
-  // Views & Modals
   const [showAddWord, setShowAddWord] = useState(false);
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [viewingWordId, setViewingWordId] = useState<string | null>(null);
   const [viewingGroupId, setViewingGroupId] = useState<string | null>(null);
   const [showBulkAddGroup, setShowBulkAddGroup] = useState(false);
 
-  // Training state
-  const [activeTrainingMode, setActiveTrainingMode] = useState<'flashcards' | 'quiz' | 'sentence' | 'timeattack' | 'stats' | null>(null);
+  const [activeTrainingMode, setActiveTrainingMode] = useState<'flashcards'|'quiz'|'sentence'|'timeattack'|'constructor'|'brainstorm'|'stats'|null>(null);
   const [sessionStats, setSessionStats] = useState({ correct: 0, total: 0 });
-
-  const currentCategoryWords = words.filter(w => w.category === dictCategory);
-  const currentCategoryGroups = groups.filter(g => g.category === dictCategory);
 
   const getTrainingWords = () => {
     let selectedSet = new Set(selectedWordIds);
     words.forEach(w => {
       if (w.groupIds.some(id => selectedGroupIds.has(id))) selectedSet.add(w.id);
     });
-    const activeList = Array.from(selectedSet).map(id => words.find(w => w.id === id)).filter(Boolean) as Word[];
-    return activeList;
+    return Array.from(selectedSet).map(id => words.find(w => w.id === id)).filter(Boolean) as Word[];
   };
 
   const deleteWords = (ids: string[]) => {
-    ids.forEach(id => deleteDoc(doc(db, 'users', user.uid, 'words', id)));
+    ids.forEach(id => deleteDoc(doc(db, 'users', user.uid, 'words', id)).catch(console.error));
     const newSelected = new Set(selectedWordIds);
     ids.forEach(id => newSelected.delete(id));
     setSelectedWordIds(newSelected);
   };
 
-  // Прогресс: логика пересчета
-  const handleUpdateProgress = (wordId: string, isCorrect: boolean) => {
+  const handleDeleteAccount = async () => {
+     if(window.confirm("Вы уверены? Это навсегда удалит ваш аккаунт и все слова.")) {
+        try {
+           await deleteUser(user);
+        } catch(e: any) {
+           alert("Необходимо перезайти в аккаунт перед удалением (в целях безопасности).");
+           signOut(auth);
+        }
+     }
+  };
+
+  const handleUpdateProgress = (wordId: string, isCorrect: boolean, mode: string = 'general') => {
     setSessionStats(s => ({ correct: s.correct + (isCorrect ? 1 : 0), total: s.total + 1 }));
     const word = words.find(w => w.id === wordId);
     if (!word) return;
     
+    if (mode === 'sentence' && isCorrect) return; 
+
     const correctAnswers = word.correctAnswers + (isCorrect ? 1 : 0);
     const incorrectAnswers = word.incorrectAnswers + (!isCorrect ? 1 : 0);
-    
     let masteryLevel = word.masteryLevel + (isCorrect ? 20 : -10);
     if (masteryLevel > 100) masteryLevel = 100;
     if (masteryLevel < 0) masteryLevel = 0;
     
-    updateDoc(doc(db, 'users', user.uid, 'words', wordId), { correctAnswers, incorrectAnswers, masteryLevel });
+    updateDoc(doc(db, 'users', user.uid, 'words', wordId), { correctAnswers, incorrectAnswers, masteryLevel }).catch(console.error);
   };
 
+  const springConfig = { type: 'spring', stiffness: 150, damping: 25 };
+
+  if (!isProfileLoaded) {
+    return <div className="min-h-screen flex items-center justify-center bg-[#F7F7F5]"><Loader2 className="w-8 h-8 animate-spin text-teal-600" /></div>;
+  }
+
+  // ОНБОРДИНГ
+  if (userProfile && !userProfile.onboarded) {
+    return <OnboardingModal user={user} onSave={(level: string) => {
+       setDoc(doc(db, 'users', user.uid, 'profile', 'data'), { level, onboarded: true }, { merge: true })
+        .then(() => setUserProfile({ level, onboarded: true }))
+        .catch(console.error);
+    }} />;
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 md:flex flex-row relative bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] overflow-hidden">
+    <div className="min-h-screen bg-[#F7F7F5] font-sans text-stone-800 md:flex flex-row relative overflow-hidden">
       
       {/* DESKTOP SIDEBAR */}
       {!activeTrainingMode && (
-        <aside className="hidden md:flex flex-col w-64 bg-white/90 backdrop-blur-xl border-r border-slate-200 shadow-sm p-4 z-40 fixed top-0 bottom-0 left-0">
-          <div className="flex items-center gap-3 mb-10 px-2 mt-4">
-             <BookOpen className="w-8 h-8 text-blue-500" />
-             <span className="text-2xl font-black">Words</span>
+        <aside className="hidden md:flex flex-col w-64 bg-white/70 backdrop-blur-xl border-r border-white/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-4 z-40 fixed top-0 bottom-0 left-0">
+          <div className="flex items-center gap-3 mb-10 px-2 mt-4 text-teal-600">
+             <BookOpen className="w-8 h-8" /> <span className="text-2xl font-black text-stone-800">ZenWords</span>
           </div>
           <nav className="flex-1 space-y-2">
-             <SidebarItem active={activeTab === 'dict'} icon={<BookOpen />} label="Словари" onClick={() => { setActiveTab('dict'); setViewingGroupId(null); }} />
+             <SidebarItem active={activeTab === 'dict'} icon={<BookOpen />} label="Словарь" onClick={() => { setActiveTab('dict'); setViewingGroupId(null); }} />
              <SidebarItem active={activeTab === 'groups'} icon={<Layers />} label="Группы" onClick={() => { setActiveTab('groups'); setViewingGroupId(null); }} />
              <SidebarItem active={activeTab === 'train'} icon={<PlayCircle />} label="Тренировка" onClick={() => { setActiveTab('train'); setViewingGroupId(null); }} />
              <SidebarItem active={activeTab === 'settings'} icon={<Settings />} label="Настройки" onClick={() => { setActiveTab('settings'); setViewingGroupId(null); }} />
@@ -277,8 +254,8 @@ function MainApp({ user }: { user: User }) {
 
       {/* MOBILE BOTTOM NAV */}
       {!activeTrainingMode && (
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 h-20 bg-white/90 backdrop-blur-xl border-t border-slate-200 flex justify-around items-center px-2 z-40 pb-safe">
-          <NavItem active={activeTab === 'dict'} icon={<BookOpen className="w-6 h-6" />} label="Словари" onClick={() => { setActiveTab('dict'); setViewingGroupId(null); }} />
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 h-20 bg-white/70 backdrop-blur-xl border-t border-white/60 flex justify-around items-center px-2 z-40 pb-safe shadow-[0_-8px_30px_rgb(0,0,0,0.02)]">
+          <NavItem active={activeTab === 'dict'} icon={<BookOpen className="w-6 h-6" />} label="Словарь" onClick={() => { setActiveTab('dict'); setViewingGroupId(null); }} />
           <NavItem active={activeTab === 'groups'} icon={<Layers className="w-6 h-6" />} label="Группы" onClick={() => { setActiveTab('groups'); setViewingGroupId(null); }} />
           <NavItem active={activeTab === 'train'} icon={<PlayCircle className="w-6 h-6" />} label="Тренировка" onClick={() => { setActiveTab('train'); setViewingGroupId(null); }} />
           <NavItem active={activeTab === 'settings'} icon={<Settings className="w-6 h-6" />} label="Настройки" onClick={() => { setActiveTab('settings'); setViewingGroupId(null); }} />
@@ -288,382 +265,240 @@ function MainApp({ user }: { user: User }) {
       {/* MAIN CONTENT AREA */}
       <main className={`flex-1 flex flex-col h-screen overflow-y-auto ${!activeTrainingMode ? 'md:ml-64 pb-24 md:pb-0' : ''}`}>
         <div className="max-w-4xl mx-auto w-full relative min-h-full flex flex-col">
-          {/* Top Header */}
+          
           {!activeTrainingMode && !viewingGroupId && activeTab !== 'settings' && activeTab !== 'train' && (
-            <div className="sticky top-0 z-30 bg-slate-50/80 backdrop-blur-xl pt-12 md:pt-8 pb-4 px-4 md:px-8 border-b border-slate-200">
-              <h1 className="text-3xl font-bold tracking-tight mb-4">
-                {activeTab === 'dict' ? 'Словари' : 'Группы слов'}
+            <div className="sticky top-0 z-30 bg-[#F7F7F5]/80 backdrop-blur-xl pt-12 md:pt-8 pb-4 px-4 md:px-8 border-b border-stone-200/50">
+              <h1 className="text-3xl font-bold tracking-tight text-stone-800">
+                {activeTab === 'dict' ? 'Ваш словарь' : 'Группы слов'}
               </h1>
-              <div className="flex bg-slate-200/60 p-1 rounded-xl max-w-sm">
-                {(['general', 'collocation', 'idiom'] as Category[]).map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => { setDictCategory(cat); setSelectedWordIds(new Set()); setSelectedGroupIds(new Set()); }}
-                    className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all ${dictCategory === cat ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                  >
-                    {cat === 'general' ? 'Слова' : cat === 'collocation' ? 'Устойчивые выражения' : 'Идиомы'}
-                  </button>
-                ))}
-              </div>
             </div>
           )}
 
           {/* VIEWS */}
           <AnimatePresence mode="wait">
             {!activeTrainingMode && !viewingGroupId && activeTab === 'dict' && (
-              <motion.div key="dict" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="p-4 md:p-8 space-y-3 pb-32">
-            {currentCategoryWords.length > 0 && (
-              <div className="flex justify-between items-center px-1 mb-2">
-                <button 
-                  onClick={() => {
-                    if (selectedWordIds.size === currentCategoryWords.length) setSelectedWordIds(new Set());
-                    else setSelectedWordIds(new Set(currentCategoryWords.map(w => w.id)));
-                  }} 
-                  className="text-sm font-bold text-blue-500 flex items-center gap-1 active:opacity-70"
-                >
-                  <CheckCircle2 className="w-4 h-4"/> 
-                  {selectedWordIds.size === currentCategoryWords.length ? 'Снять выделение' : 'Выбрать все'}
-                </button>
-              </div>
-            )}
-            {currentCategoryWords.length === 0 ? (
-              <div className="text-center text-slate-400 py-12">Нет добавленных слов. Нажмите +, чтобы добавить.</div>
-            ) : (
-              currentCategoryWords.map(word => (
-                <div key={word.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 active:scale-[0.98] transition-transform">
-                   <button 
-                     onClick={() => {
-                        const newSet = new Set(selectedWordIds);
-                        newSet.has(word.id) ? newSet.delete(word.id) : newSet.add(word.id);
-                        setSelectedWordIds(newSet);
-                     }}
-                     className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedWordIds.has(word.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}
-                   >
-                     {selectedWordIds.has(word.id) && <Check className="w-4 h-4 text-white" />}
-                   </button>
-                   <div className="flex-1 cursor-pointer" onClick={() => setViewingWordId(word.id)}>
-                     <h3 className="text-lg font-bold">{word.original}</h3>
-                     <p className="text-slate-500 text-sm mt-0.5 line-clamp-1">{word.translations[0]?.text}</p>
-                     {/* ИНДИКАТОР ПРОГРЕССА В СПИСКЕ */}
-                     <MasteryBar masteryLevel={word.masteryLevel} />
-                   </div>
-                </div>
-              ))
-            )}
-
-            <button onClick={() => setShowAddWord(true)} className="fixed bottom-24 right-5 w-14 h-14 bg-blue-500 text-white rounded-full shadow-xl flex items-center justify-center hover:bg-blue-600 active:scale-90 transition-all z-20">
-              <Plus className="w-6 h-6" />
-            </button>
-
-            {/* Bulk Actions Bar */}
-            <AnimatePresence>
-               {selectedWordIds.size > 0 && (
-                  <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="fixed bottom-24 left-4 right-24 bg-slate-900 rounded-2xl shadow-2xl p-2 flex items-center justify-around z-10 border border-slate-700">
-                     <button onClick={() => deleteWords(Array.from(selectedWordIds))} className="flex flex-col items-center p-2 text-rose-400 active:opacity-70">
-                        <Trash2 className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-bold">Удалить</span>
-                     </button>
-                     <button onClick={() => setShowBulkAddGroup(true)} className="flex flex-col items-center p-2 text-blue-400 active:opacity-70">
-                        <FolderPlus className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-bold">В группу</span>
-                     </button>
-                     <button onClick={() => { setActiveTab('train'); }} className="flex flex-col items-center p-2 text-emerald-400 active:opacity-70 border-l border-slate-700 pl-4">
-                        <PlayCircle className="w-5 h-5 mb-1 text-emerald-400 fill-emerald-400/20" />
-                        <span className="text-[10px] font-bold">Тренировать ({selectedWordIds.size})</span>
-                     </button>
-                  </motion.div>
-               )}
-            </AnimatePresence>
-          </motion.div>
-        )}
-
-        {!activeTrainingMode && !viewingGroupId && activeTab === 'groups' && (
-          <motion.div key="groups" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="p-4 space-y-3">
-             {currentCategoryGroups.length > 0 && (
-               <div className="flex justify-between items-center mb-2 px-1">
-                 <h2 className="text-xl font-bold tracking-tight">Ваши группы</h2>
-                 <button 
-                   onClick={() => {
-                     if (selectedGroupIds.size === currentCategoryGroups.length) {
-                       setSelectedGroupIds(new Set());
-                     } else {
-                       setSelectedGroupIds(new Set(currentCategoryGroups.map(g => g.id)));
-                     }
-                   }} 
-                   className="text-sm font-bold text-blue-500 flex items-center gap-1 active:opacity-70"
-                 >
-                   <CheckCircle2 className="w-4 h-4"/> 
-                   {selectedGroupIds.size === currentCategoryGroups.length ? 'Снять выделение' : 'Выбрать все'}
-                 </button>
-               </div>
-             )}
-            {currentCategoryGroups.length === 0 ? (
-              <div className="text-center text-slate-400 py-12">Нет групп.</div>
-            ) : (
-              currentCategoryGroups.map(group => {
-                const count = words.filter(w => w.groupIds.includes(group.id)).length;
-                return (
-                  <div key={group.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 transition-transform">
-                     <button 
-                      onClick={(e) => {
-                         e.stopPropagation();
-                         const newSet = new Set(selectedGroupIds);
-                         newSet.has(group.id) ? newSet.delete(group.id) : newSet.add(group.id);
-                         setSelectedGroupIds(newSet);
-                      }}
-                      className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedGroupIds.has(group.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}
+              <motion.div key="dict" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={springConfig} className="p-4 md:p-8 space-y-3 pb-32">
+                {words.length > 0 && (
+                  <div className="flex justify-between items-center px-1 mb-2">
+                    <button onClick={() => {
+                        if (selectedWordIds.size === words.length) setSelectedWordIds(new Set());
+                        else setSelectedWordIds(new Set(words.map(w => w.id)));
+                      }} 
+                      className="text-sm font-bold text-teal-600 flex items-center gap-1 active:opacity-70"
                     >
-                      {selectedGroupIds.has(group.id) && <Check className="w-4 h-4 text-white" />}
+                      <CheckCircle2 className="w-4 h-4"/> Выбрать все
                     </button>
-                    <div className="flex items-center gap-4 flex-1 cursor-pointer active:scale-[0.98]" onClick={() => setViewingGroupId(group.id)}>
-                      <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                        <Layers className="w-5 h-5 text-indigo-500" />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-bold">{group.name}</h3>
-                        <p className="text-slate-500 text-sm mt-0.5">{count} элементов</p>
-                      </div>
-                      <ArrowRight className="w-5 h-5 text-slate-300 shrink-0" />
-                    </div>
                   </div>
-                )
-              })
-            )}
-             <button onClick={() => setShowAddGroup(true)} className="fixed bottom-24 right-5 w-14 h-14 bg-indigo-500 text-white rounded-full shadow-xl flex items-center justify-center hover:bg-indigo-600 active:scale-90 transition-all z-20">
-              <Plus className="w-6 h-6" />
-            </button>
-
-            {/* Bulk Actions Bar for Groups */}
-            <AnimatePresence>
-               {selectedGroupIds.size > 0 && (
-                  <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="fixed bottom-24 left-4 right-24 bg-slate-900 rounded-2xl shadow-2xl p-2 flex items-center justify-around z-10 border border-slate-700">
-                     <button onClick={() => {
-                        selectedGroupIds.forEach(id => deleteDoc(doc(db, 'users', user.uid, 'groups', id)));
-                        words.forEach(w => {
-                           const remainingGroups = w.groupIds.filter(gid => !selectedGroupIds.has(gid));
-                           if (remainingGroups.length !== w.groupIds.length) {
-                              updateDoc(doc(db, 'users', user.uid, 'words', w.id), { groupIds: remainingGroups });
-                           }
-                        });
-                        setSelectedGroupIds(new Set());
-                     }} className="flex flex-col items-center p-2 text-rose-400 active:opacity-70">
-                        <Trash2 className="w-5 h-5 mb-1" />
-                        <span className="text-[10px] font-bold">Удалить</span>
-                     </button>
-                     <button onClick={() => { setActiveTab('train'); }} className="flex flex-col items-center p-2 text-emerald-400 active:opacity-70 border-l border-slate-700 pl-4">
-                        <PlayCircle className="w-5 h-5 mb-1 text-emerald-400 fill-emerald-400/20" />
-                        <span className="text-[10px] font-bold">Тренировать ({selectedGroupIds.size})</span>
-                     </button>
-                  </motion.div>
-               )}
-            </AnimatePresence>
-          </motion.div>
-        )}
-
-        {!activeTrainingMode && viewingGroupId && (
-           <GroupView 
-             group={groups.find(g => g.id === viewingGroupId)!} 
-             words={words.filter(w => w.groupIds.includes(viewingGroupId))}
-             onClose={() => setViewingGroupId(null)}
-             onRemoveFromGroup={(wordId: string) => {
-                const w = words.find(w => w.id === wordId);
-                if (w) updateDoc(doc(db, 'users', user.uid, 'words', wordId), { groupIds: w.groupIds.filter(gid => gid !== viewingGroupId) });
-             }}
-             onWordClick={(wordId) => setViewingWordId(wordId)}
-             selectedWordIds={selectedWordIds}
-             setSelectedWordIds={setSelectedWordIds}
-             onTrain={() => setActiveTab('train')}
-           />
-        )}
-
-        {!activeTrainingMode && !viewingGroupId && activeTab === 'train' && (
-          <motion.div key="train" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="p-4 pt-12">
-            <h1 className="text-3xl font-bold tracking-tight mb-2">Тренировка</h1>
-            
-            {getTrainingWords().length === 0 ? (
-               <div className="mb-8">
-                  <p className="text-slate-500 mb-4">Выберите слова для тренировки:</p>
-                  <div className="space-y-3">
-                     <button onClick={() => { setSelectedWordIds(new Set(currentCategoryWords.map(w => w.id))); }} className="w-full bg-indigo-50 p-4 rounded-2xl shadow-sm border border-indigo-100 font-bold text-left active:scale-[0.98] transition-transform flex items-center justify-between text-indigo-700">
-                        <span>Словарь полностью</span> <span className="font-normal">{currentCategoryWords.length} слов</span>
-                     </button>
-                     {currentCategoryGroups.map(group => {
-                        const count = words.filter(w => w.groupIds.includes(group.id)).length;
-                        return (
-                           <button key={group.id} onClick={() => { setSelectedGroupIds(new Set([group.id])); }} className="w-full bg-white p-4 rounded-2xl shadow-sm border border-slate-100 font-bold text-left active:scale-[0.98] transition-transform flex items-center justify-between">
-                              <span>Группа: {group.name}</span> <span className="text-slate-400 font-normal">{count} слов</span>
-                           </button>
-                        )
-                     })}
-                     <button onClick={() => setActiveTab('dict')} className="w-full bg-slate-50 p-4 rounded-2xl border border-slate-200 font-bold text-left active:scale-[0.98] transition-transform text-slate-600 flex items-center justify-between mt-4">
-                        Выбрать вручную из словаря <ArrowRight className="w-4 h-4"/>
-                     </button>
-                  </div>
-               </div>
-            ) : (
-               <>
-                  <div className="flex items-center justify-between mb-8">
-                     <p className="text-slate-500">
-                       Выбрано элементов: <span className="font-bold text-slate-800">{getTrainingWords().length}</span>
-                     </p>
-                     <button onClick={() => { setSelectedWordIds(new Set()); setSelectedGroupIds(new Set()); }} className="text-blue-500 font-bold text-sm bg-blue-50 px-3 py-1.5 rounded-lg active:scale-95 transition-transform">
-                        Сбросить
-                     </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <TrainCard title="Карточки" icon={<FlipHorizontal />} color="text-amber-500" bg="bg-amber-50" onClick={() => { setActiveTrainingMode('flashcards'); setSessionStats({correct:0, total:0}); }} />
-                    <TrainCard title="Викторина" icon={<CheckCircle2 />} color="text-emerald-500" bg="bg-emerald-50" onClick={() => { setActiveTrainingMode('quiz'); setSessionStats({correct:0, total:0}); }} />
-                    <TrainCard title="Предложение" icon={<Type />} color="text-blue-500" bg="bg-blue-50" onClick={() => { setActiveTrainingMode('sentence'); setSessionStats({correct:0, total:0}); }} />
-                    <TrainCard title="Выживание" icon={<Timer />} color="text-rose-500" bg="bg-rose-50" onClick={() => { setActiveTrainingMode('timeattack'); setSessionStats({correct:0, total:0}); }} />
-                  </div>
-               </>
-            )}
-          </motion.div>
-        )}
-
-        {!activeTrainingMode && !viewingGroupId && activeTab === 'settings' && (
-          <motion.div key="settings" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="p-4 pt-12 md:p-8 flex flex-col justify-between h-full">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight mb-8">Настройки</h1>
-              <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col gap-6 mb-6">
-                 <div className="flex items-center gap-4">
-                    {user?.photoURL ? (
-                       <img src={user.photoURL} alt="Avatar" className="w-16 h-16 rounded-full border-2 border-slate-100" />
-                    ) : (
-                       <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center font-bold text-2xl text-slate-400">
-                          {user?.displayName ? user.displayName[0].toUpperCase() : '?'}
+                )}
+                {words.length === 0 ? (
+                  <div className="text-center text-stone-400 py-12">Нет добавленных слов. Нажмите +, чтобы добавить.</div>
+                ) : (
+                  words.map(word => (
+                    <div key={word.id} className="bg-white p-5 rounded-[2rem] shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-white/60 flex items-center gap-4 active:scale-[0.98] transition-transform">
+                       <button onClick={() => {
+                            const newSet = new Set(selectedWordIds);
+                            newSet.has(word.id) ? newSet.delete(word.id) : newSet.add(word.id);
+                            setSelectedWordIds(newSet);
+                         }}
+                         className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedWordIds.has(word.id) ? 'bg-teal-500 border-teal-500' : 'border-stone-300'}`}
+                       >
+                         {selectedWordIds.has(word.id) && <Check className="w-4 h-4 text-white" />}
+                       </button>
+                       <div className="flex-1 cursor-pointer" onClick={() => setViewingWordId(word.id)}>
+                         <h3 className="text-lg font-bold text-stone-800">{word.original}</h3>
+                         <p className="text-stone-500 text-sm mt-0.5">{word.translation}</p>
+                         <MasteryBar masteryLevel={word.masteryLevel} />
                        </div>
-                    )}
-                    <div>
-                       <div className="font-bold text-lg">{user?.displayName || 'Пользователь'}</div>
-                       <div className="text-slate-500 text-sm">{user?.email}</div>
                     </div>
-                 </div>
+                  ))
+                )}
 
-                 <div className="border-t border-slate-100 pt-6">
-                    <h3 className="font-bold mb-3">Уровень владения языком</h3>
-                    <div className="flex bg-slate-100 p-1 rounded-xl">
-                      {['Beginner', 'Intermediate', 'Advanced'].map((lvl) => (
-                        <button
-                          key={lvl}
-                          onClick={() => {
-                             setDoc(doc(db, 'users', user.uid, 'profile', 'data'), { ...userProfile, level: lvl }, { merge: true });
-                          }}
-                          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${userProfile?.level === lvl ? 'bg-white text-blue-500 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                        >
-                          {lvl}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-slate-400 mt-3 text-center">ИИ использует ваш уровень для адаптации примеров.</p>
-                 </div>
-              </div>
-            </div>
+                <button onClick={() => setShowAddWord(true)} className="fixed bottom-24 md:bottom-8 right-5 md:right-8 w-14 h-14 bg-teal-600 text-white rounded-full shadow-[0_8px_30px_rgb(13,148,136,0.3)] flex items-center justify-center hover:bg-teal-700 active:scale-90 transition-all z-20">
+                  <Plus className="w-6 h-6" />
+                </button>
 
-            <button 
-              onClick={() => signOut(auth)} 
-              className="mt-4 w-full py-4 bg-rose-50 text-rose-500 font-bold rounded-2xl active:scale-95 transition-transform"
-            >
-              Выйти из аккаунта
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                <AnimatePresence>
+                   {selectedWordIds.size > 0 && (
+                      <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} transition={springConfig} className="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.1)] p-2 flex items-center justify-around z-10 border border-stone-200/50 w-[90%] max-w-sm">
+                         <button onClick={() => deleteWords(Array.from(selectedWordIds))} className="flex flex-col items-center p-2 text-orange-400 active:opacity-70 flex-1">
+                            <Trash2 className="w-5 h-5 mb-1" /> <span className="text-[10px] font-bold">Удалить</span>
+                         </button>
+                         <button onClick={() => setShowBulkAddGroup(true)} className="flex flex-col items-center p-2 text-sky-600 active:opacity-70 flex-1 border-l border-stone-100">
+                            <FolderPlus className="w-5 h-5 mb-1" /> <span className="text-[10px] font-bold">В группу</span>
+                         </button>
+                         <button onClick={() => { setActiveTab('train'); }} className="flex flex-col items-center p-2 text-teal-600 active:opacity-70 flex-1 border-l border-stone-100">
+                            <PlayCircle className="w-5 h-5 mb-1 fill-teal-600/10" /> <span className="text-[10px] font-bold">Учить ({selectedWordIds.size})</span>
+                         </button>
+                      </motion.div>
+                   )}
+                </AnimatePresence>
+              </motion.div>
+            )}
 
-      {/* MODALS */}
-      <AnimatePresence>
-        {userProfile && !userProfile.onboarded && (
-           <OnboardingModal 
-             user={user} 
-             onSave={(level: string) => {
-                setDoc(doc(db, 'users', user.uid, 'profile', 'data'), { level, onboarded: true });
-             }} 
-           />
-        )}
-        {showAddWord && (
-          <AddWordModal
-            category={dictCategory}
-            groups={currentCategoryGroups}
-            userProfile={userProfile}
-            onClose={() => setShowAddWord(false)}
-            onSave={(newWord: any) => { 
-                const id = doc(collection(db, 'users', user.uid, 'words')).id;
-                setDoc(doc(db, 'users', user.uid, 'words', id), { ...newWord, id, createdAt: Date.now(), correctAnswers: 0, incorrectAnswers: 0, masteryLevel: 0 }); 
-                setShowAddWord(false); 
-            }}
-          />
-        )}
-        {showAddGroup && (
-           <AddGroupModal 
-              onClose={() => setShowAddGroup(false)}
-              onSave={(name: string) => {
-                const id = doc(collection(db, 'users', user.uid, 'groups')).id;
-                setDoc(doc(db, 'users', user.uid, 'groups', id), { id, name, category: dictCategory });
-                setShowAddGroup(false);
-              }}
-           />
-        )}
-        {viewingWordId && (
-           <WordEditorModal 
-              word={words.find(w => w.id === viewingWordId)!}
-              groups={groups.filter(g => g.category === words.find(w => w.id === viewingWordId)?.category)}
-              userProfile={userProfile}
-              onClose={() => setViewingWordId(null)}
-              onSave={(updatedWord: any) => {
-                 updateDoc(doc(db, 'users', user.uid, 'words', updatedWord.id), updatedWord);
-                 setViewingWordId(null);
-              }}
-              onDelete={() => {
-                 deleteWords([viewingWordId]);
-                 setViewingWordId(null);
-              }}
-              onCreateGroup={(name: string, category: string) => {
-                 const newGroupId = doc(collection(db, 'users', user.uid, 'groups')).id;
-                 setDoc(doc(db, 'users', user.uid, 'groups', newGroupId), { id: newGroupId, name, category });
-                 return newGroupId;
-              }}
-           />
-        )}
-        {showBulkAddGroup && (
-           <BulkAddGroupModal 
-              groups={currentCategoryGroups}
-              onClose={() => setShowBulkAddGroup(false)}
-              onSave={(groupId: string) => {
-                 words.forEach(w => {
-                    if (selectedWordIds.has(w.id) && !w.groupIds.includes(groupId)) {
-                       updateDoc(doc(db, 'users', user.uid, 'words', w.id), { groupIds: [...w.groupIds, groupId] });
-                    }
-                 });
-                 setShowBulkAddGroup(false);
-                 setSelectedWordIds(new Set());
-              }}
-           />
-        )}
-      </AnimatePresence>
+            {!activeTrainingMode && !viewingGroupId && activeTab === 'groups' && (
+              <motion.div key="groups" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={springConfig} className="p-4 md:p-8 space-y-3">
+                 <button onClick={() => setShowAddGroup(true)} className="w-full bg-teal-50 border border-teal-100 text-teal-700 font-bold py-4 rounded-[2rem] flex items-center justify-center gap-2 mb-4 active:scale-95 transition-transform"><Plus className="w-5 h-5"/> Создать группу</button>
+                 {groups.length === 0 ? (
+                  <div className="text-center text-stone-400 py-12">Нет групп.</div>
+                ) : (
+                  groups.map(group => {
+                    const count = words.filter(w => w.groupIds.includes(group.id)).length;
+                    return (
+                      <div key={group.id} onClick={() => setViewingGroupId(group.id)} className="bg-white p-5 rounded-[2rem] shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-white/60 flex items-center gap-4 cursor-pointer active:scale-[0.98] transition-transform">
+                          <div className="w-12 h-12 bg-sky-50 rounded-2xl flex items-center justify-center shrink-0">
+                            <Layers className="w-6 h-6 text-sky-600" />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="text-lg font-bold text-stone-800">{group.name}</h3>
+                            <p className="text-stone-500 text-sm mt-0.5">{count} элементов</p>
+                          </div>
+                          <ArrowRight className="w-5 h-5 text-stone-300 shrink-0" />
+                      </div>
+                    )
+                  })
+                )}
+              </motion.div>
+            )}
+
+            {!activeTrainingMode && viewingGroupId && (
+               <GroupView 
+                 group={groups.find(g => g.id === viewingGroupId)!} 
+                 words={words.filter(w => w.groupIds.includes(viewingGroupId))}
+                 onClose={() => setViewingGroupId(null)}
+                 onRemoveFromGroup={(wordId: string) => {
+                    const w = words.find(w => w.id === wordId);
+                    if (w) updateDoc(doc(db, 'users', user.uid, 'words', wordId), { groupIds: w.groupIds.filter(gid => gid !== viewingGroupId) });
+                 }}
+                 selectedWordIds={selectedWordIds}
+                 setSelectedWordIds={setSelectedWordIds}
+                 onTrain={() => setActiveTab('train')}
+               />
+            )}
+
+            {!activeTrainingMode && !viewingGroupId && activeTab === 'train' && (
+              <motion.div key="train" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={springConfig} className="p-4 md:p-8 pt-12 md:pt-8">
+                <h1 className="text-3xl font-bold tracking-tight mb-6 text-stone-800">Тренировка</h1>
+                
+                {getTrainingWords().length === 0 ? (
+                   <div className="mb-8">
+                      <p className="text-stone-500 mb-4">Выберите базу для тренировки:</p>
+                      <div className="space-y-3">
+                         <button onClick={() => setSelectedWordIds(new Set(words.map(w => w.id)))} className="w-full bg-teal-50 p-5 rounded-[2rem] shadow-sm border border-teal-100 font-bold text-left active:scale-[0.98] transition-transform flex items-center justify-between text-teal-700">
+                            <span>Весь словарь</span> <span className="font-normal opacity-70">{words.length} слов</span>
+                         </button>
+                         {groups.map(group => {
+                            const count = words.filter(w => w.groupIds.includes(group.id)).length;
+                            return (
+                               <button key={group.id} onClick={() => setSelectedGroupIds(new Set([group.id]))} className="w-full bg-white p-5 rounded-[2rem] shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-white/60 font-bold text-left active:scale-[0.98] transition-transform flex items-center justify-between">
+                                  <span>{group.name}</span> <span className="text-stone-400 font-normal">{count} слов</span>
+                               </button>
+                            )
+                         })}
+                      </div>
+                   </div>
+                ) : (
+                   <>
+                      <div className="flex items-center justify-between mb-8 bg-white/50 p-4 rounded-2xl border border-white/60">
+                         <p className="text-stone-600 font-medium">Выбрано: <span className="font-black text-stone-900">{getTrainingWords().length}</span></p>
+                         <button onClick={() => { setSelectedWordIds(new Set()); setSelectedGroupIds(new Set()); }} className="text-stone-400 font-bold text-sm bg-stone-200/50 px-4 py-2 rounded-xl active:scale-95 transition-transform">Изменить</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <TrainCard title="Карточки" desc="Базовое запоминание" icon={<FlipHorizontal />} color="text-sky-600" bg="bg-sky-50" onClick={() => { setActiveTrainingMode('flashcards'); setSessionStats({correct:0, total:0}); }} />
+                        <TrainCard title="Викторина" desc="Тест вариантов" icon={<CheckCircle2 />} color="text-teal-600" bg="bg-teal-50" onClick={() => { setActiveTrainingMode('quiz'); setSessionStats({correct:0, total:0}); }} />
+                        <TrainCard title="Конструктор" desc="Собери слово" icon={<Layers />} color="text-orange-500" bg="bg-orange-50" onClick={() => { setActiveTrainingMode('constructor'); setSessionStats({correct:0, total:0}); }} />
+                        <TrainCard title="Фразы" desc="Свой контекст" icon={<Type />} color="text-indigo-500" bg="bg-indigo-50" onClick={() => { setActiveTrainingMode('sentence'); setSessionStats({correct:0, total:0}); }} />
+                        <TrainCard title="Брейншторм" desc="Комбо-режим" icon={<Brain />} color="text-purple-500" bg="bg-purple-50" className="col-span-2" onClick={() => { setActiveTrainingMode('brainstorm'); setSessionStats({correct:0, total:0}); }} />
+                      </div>
+                   </>
+                )}
+              </motion.div>
+            )}
+
+            {!activeTrainingMode && !viewingGroupId && activeTab === 'settings' && (
+              <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={springConfig} className="p-4 md:p-8 pt-12 md:pt-8 flex flex-col justify-between h-full">
+                <div>
+                  <h1 className="text-3xl font-bold tracking-tight mb-8 text-stone-800">Настройки</h1>
+                  <div className="bg-white rounded-[2rem] p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white/60 mb-6">
+                     <div className="font-bold text-lg text-stone-800 mb-1">{user?.displayName || 'Пользователь'}</div>
+                     <div className="text-stone-500 text-sm mb-6">{user?.email}</div>
+
+                     <div className="border-t border-stone-100 pt-6">
+                        <h3 className="font-bold text-stone-800 mb-4">Уровень языка</h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          {LEVELS.map((lvl) => (
+                            <button key={lvl} onClick={() => setDoc(doc(db, 'users', user.uid, 'profile', 'data'), { ...userProfile, level: lvl }, { merge: true })}
+                              className={`py-3 text-xs font-bold rounded-xl transition-all ${userProfile?.level === lvl ? 'bg-teal-600 text-white shadow-sm' : 'bg-stone-50 text-stone-500 hover:bg-stone-100'}`}
+                            >{lvl}</button>
+                          ))}
+                        </div>
+                     </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <button onClick={() => signOut(auth)} className="w-full py-4 bg-stone-200/50 text-stone-700 font-bold rounded-2xl active:scale-95 transition-transform">Выйти</button>
+                  <button onClick={handleDeleteAccount} className="w-full py-4 bg-orange-50 text-orange-500 font-bold rounded-2xl active:scale-95 transition-transform flex items-center justify-center gap-2"><AlertTriangle className="w-4 h-4"/> Удалить аккаунт</button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* MODALS */}
+          <AnimatePresence>
+            {showAddWord && (
+              <AddWordModal userProfile={userProfile} onClose={() => setShowAddWord(false)} onSave={(newWord: any) => { 
+                    const id = doc(collection(db, 'users', user.uid, 'words')).id;
+                    setDoc(doc(db, 'users', user.uid, 'words', id), { ...newWord, id, createdAt: Date.now(), correctAnswers: 0, incorrectAnswers: 0, masteryLevel: 0 })
+                      .catch(console.error);
+                    setShowAddWord(false); 
+                }}
+              />
+            )}
+            {showAddGroup && (
+               <AddGroupModal onClose={() => setShowAddGroup(false)} onSave={(name: string) => {
+                    const id = doc(collection(db, 'users', user.uid, 'groups')).id;
+                    setDoc(doc(db, 'users', user.uid, 'groups', id), { id, name }).catch(console.error);
+                    setShowAddGroup(false);
+                  }}
+               />
+            )}
+            {viewingWordId && (
+               <WordEditorModal 
+                  word={words.find(w => w.id === viewingWordId)!} groups={groups} userProfile={userProfile}
+                  onClose={() => setViewingWordId(null)}
+                  onSave={(updatedWord: any) => { updateDoc(doc(db, 'users', user.uid, 'words', updatedWord.id), updatedWord).catch(console.error); setViewingWordId(null); }}
+                  onDelete={() => { deleteWords([viewingWordId]); setViewingWordId(null); }}
+               />
+            )}
+            {showBulkAddGroup && (
+               <BulkAddGroupModal groups={groups} onClose={() => setShowBulkAddGroup(false)} onSave={(groupId: string) => {
+                     words.forEach(w => { if (selectedWordIds.has(w.id) && !w.groupIds.includes(groupId)) updateDoc(doc(db, 'users', user.uid, 'words', w.id), { groupIds: [...w.groupIds, groupId] }).catch(console.error); });
+                     setShowBulkAddGroup(false); setSelectedWordIds(new Set());
+                  }}
+               />
+            )}
+          </AnimatePresence>
         </div>
       </main>
 
       {/* TRAINING OVERLAY */}
       <AnimatePresence>
          {activeTrainingMode && (
-            <motion.div initial={{ opacity: 0, y: '100%' }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="fixed inset-0 bg-slate-900 border-x border-slate-800 z-50 flex flex-col shadow-2xl">
-               <div className="flex justify-between items-center p-4 md:p-8 pt-12 md:pt-8 text-white max-w-4xl mx-auto w-full">
-                  <span className="font-medium text-slate-300 opacity-0">Score</span>
-                  <button onClick={() => setActiveTrainingMode(null)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 active:scale-95 transition-all">
-                     <X className="w-6 h-6 text-white" />
-                  </button>
+            <motion.div initial={{ opacity: 0, y: '10%' }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: '10%' }} transition={springConfig} className="fixed inset-0 bg-[#F7F7F5] z-50 flex flex-col">
+               <div className="flex justify-between items-center p-4 md:p-8 bg-white/70 backdrop-blur-xl border-b border-stone-200/50">
+                  <span className="font-bold text-stone-800 tracking-tight capitalize">{activeTrainingMode === 'stats' ? 'Результаты' : activeTrainingMode}</span>
+                  <button onClick={() => setActiveTrainingMode(null)} className="p-2 bg-stone-100 rounded-full hover:bg-stone-200 active:scale-95 transition-all"><X className="w-5 h-5 text-stone-600" /></button>
                </div>
-               <div className="flex-1 flex flex-col items-center justify-center p-6 max-w-4xl mx-auto w-full">
+               <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center">
                   {activeTrainingMode === 'stats' ? (
-                     <SessionStats stats={sessionStats} onClose={() => { setActiveTrainingMode(null); }} />
-                  ) : getTrainingWords().length === 0 ? (
-                     <div className="text-white text-center">Нет слов для тренировки.</div>
+                     <SessionStats stats={sessionStats} onClose={() => setActiveTrainingMode(null)} />
                   ) : (
-                     <div className="w-full">
-                         {activeTrainingMode === 'flashcards' && <ModeFlashcards words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
+                     <div className="w-full max-w-sm">
+                        {activeTrainingMode === 'flashcards' && <ModeFlashcards words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
                         {activeTrainingMode === 'quiz' && <ModeQuiz words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
-                        {activeTrainingMode === 'sentence' && <ModeSentence words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
-                        {activeTrainingMode === 'timeattack' && <ModeTimeAttack words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
+                        {activeTrainingMode === 'constructor' && <ModeConstructor words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
+                        {activeTrainingMode === 'sentence' && <ModeSentence words={getTrainingWords()} onProgress={(w: string, c: boolean) => handleUpdateProgress(w, c, 'sentence')} onFinish={() => setActiveTrainingMode('stats')} />}
+                        {activeTrainingMode === 'brainstorm' && <ModeBrainstorm words={getTrainingWords()} onProgress={handleUpdateProgress} onFinish={() => setActiveTrainingMode('stats')} />}
                      </div>
                   )}
                </div>
@@ -675,83 +510,256 @@ function MainApp({ user }: { user: User }) {
 }
 
 // =========================================================================
-// COMPONENTS & PROGRESS VISUALIZATION
+// UI COMPONENTS
 // =========================================================================
 
-function SessionStats({ stats, onClose }: any) {
-   const accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
-   return (
-      <div className="w-full max-w-sm flex flex-col items-center text-center">
-         <h2 className="text-3xl font-bold text-white mb-6">Тренировка завершена!</h2>
-         <div className="bg-slate-800 rounded-3xl p-8 w-full border border-slate-700 shadow-xl mb-8">
-            <div className="text-6xl font-black text-blue-500 mb-2">{accuracy}%</div>
-            <div className="text-slate-400 font-medium mb-8">Точность ответов</div>
-            
-            <div className="flex justify-between text-lg font-bold">
-               <span className="text-emerald-400">Правильно: {stats.correct}</span>
-               <span className="text-rose-500">Ошибок: {stats.total - stats.correct}</span>
-            </div>
-         </div>
-         <button onClick={onClose} className="w-full bg-blue-500 text-white font-bold py-4 rounded-2xl">Отлично</button>
-      </div>
-   );
-}
-
-function MasteryBar({ masteryLevel, showLabel = false }: { masteryLevel: number, showLabel?: boolean }) {
-   let color = 'bg-rose-500';
-   if (masteryLevel > 30) color = 'bg-amber-400';
-   if (masteryLevel > 70) color = 'bg-emerald-500';
-   
-   return (
-      <div className="mt-2 w-full">
-         {showLabel && <div className="text-xs font-bold text-slate-400 mb-1 flex justify-between"><span>Освоено</span><span>{masteryLevel}%</span></div>}
-         <div className="w-full bg-slate-100/50 rounded-full h-1.5 overflow-hidden">
-            <div className={`h-full ${color} transition-all duration-500 shadow-sm`} style={{ width: `${masteryLevel}%` }} />
-         </div>
-      </div>
-   );
+function SidebarItem({ active, icon, label, onClick }: any) {
+  return (
+    <button onClick={onClick} className={`flex items-center w-full px-4 py-4 gap-3 rounded-2xl transition-colors ${active ? 'text-teal-700 bg-teal-50 font-bold' : 'text-stone-500 hover:bg-stone-100 font-medium'}`}>
+      <div className={`${active ? 'scale-110' : 'scale-100'} transition-transform`}>{React.cloneElement(icon, { className: "w-6 h-6" })}</div>
+      <span>{label}</span>
+    </button>
+  );
 }
 
 function NavItem({ active, icon, label, onClick }: any) {
   return (
-    <button onClick={onClick} className={`flex flex-col items-center flex-1 py-1 gap-1 transition-colors ${active ? 'text-blue-500' : 'text-slate-400'}`}>
+    <button onClick={onClick} className={`flex flex-col items-center flex-1 py-1 gap-1 transition-colors ${active ? 'text-teal-600 font-bold' : 'text-stone-400 font-medium'}`}>
       <div className={`${active ? 'scale-110' : 'scale-100'} transition-transform`}>{icon}</div>
-      <span className="text-[10px] font-medium">{label}</span>
+      <span className="text-[10px]">{label}</span>
     </button>
   );
 }
 
-function SidebarItem({ active, icon, label, onClick }: any) {
-  return (
-    <button onClick={onClick} className={`flex items-center w-full px-4 py-3 gap-3 rounded-2xl transition-colors ${active ? 'text-blue-500 bg-blue-50' : 'text-slate-500 hover:bg-slate-100/50'}`}>
-      <div className={`${active ? 'scale-110' : 'scale-100'} transition-transform`}>{React.cloneElement(icon, { className: "w-6 h-6" })}</div>
-      <span className="font-bold">{label}</span>
-    </button>
-  );
-}
-
-function TrainCard({ title, icon, color, bg, onClick }: any) {
-  return (
-    <div onClick={onClick} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center gap-4 active:scale-95 transition-transform cursor-pointer">
-      <div className={`w-16 h-16 rounded-full ${bg} flex items-center justify-center`}>
-        {React.cloneElement(icon, { className: `w-8 h-8 ${color}` })}
+function MasteryBar({ masteryLevel }: { masteryLevel: number }) {
+   let color = 'bg-orange-400';
+   if (masteryLevel > 30) color = 'bg-sky-400';
+   if (masteryLevel > 70) color = 'bg-teal-500';
+   return (
+      <div className="mt-3 w-full bg-stone-100 rounded-full h-1 overflow-hidden">
+         <div className={`h-full ${color} transition-all duration-700`} style={{ width: `${masteryLevel}%` }} />
       </div>
-      <span className="font-bold text-slate-800">{title}</span>
+   );
+}
+
+function TrainCard({ title, desc, icon, color, bg, className="", onClick }: any) {
+  return (
+    <div onClick={onClick} className={`bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.03)] border border-white/60 flex flex-col gap-4 active:scale-95 transition-transform cursor-pointer ${className}`}>
+      <div className={`w-14 h-14 rounded-2xl ${bg} flex items-center justify-center`}>{React.cloneElement(icon, { className: `w-7 h-7 ${color}` })}</div>
+      <div>
+         <div className="font-bold text-stone-800 text-lg">{title}</div>
+         <div className="text-xs text-stone-400 font-medium">{desc}</div>
+      </div>
     </div>
   );
 }
 
-function GroupView({ group, words, onClose, onRemoveFromGroup, onWordClick, selectedWordIds, setSelectedWordIds, onTrain }: any) {
+// =========================================================================
+// MODALS & VIEWS
+// =========================================================================
+
+function OnboardingModal({ user, onSave }: any) {
+  const [step, setStep] = useState(0);
+  const [level, setLevel] = useState('Intermediate');
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 bg-stone-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      <motion.div initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} transition={{type:'spring', stiffness: 200, damping: 25}} className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden shadow-[0_20px_60px_rgb(0,0,0,0.1)]">
+         <div className="p-8">
+            <h2 className="text-3xl font-black mb-6 text-stone-800">Привет, {user?.displayName?.split(' ')[0] || 'студент'}! 🌿</h2>
+            
+            {step === 0 && (
+               <div className="space-y-6">
+                  <p className="text-stone-500 mb-4">Добро пожаловать в ZenWords. Здесь обучение происходит спокойно и эффективно.</p>
+                  <div className="space-y-4">
+                     <div className="flex items-start gap-4"><div className="w-10 h-10 rounded-2xl bg-teal-50 flex items-center justify-center text-teal-600 shrink-0"><BookOpen className="w-5 h-5"/></div><div><h3 className="font-bold text-stone-800">Умный словарь ИИ</h3><p className="text-stone-500 text-sm">Транскрипции, переводы из Cambridge и точные примеры.</p></div></div>
+                     <div className="flex items-start gap-4"><div className="w-10 h-10 rounded-2xl bg-sky-50 flex items-center justify-center text-sky-600 shrink-0"><Layers className="w-5 h-5"/></div><div><h3 className="font-bold text-stone-800">Конструктор и Брейншторм</h3><p className="text-stone-500 text-sm">Новые режимы для тренировки правописания и глубокого запоминания.</p></div></div>
+                  </div>
+               </div>
+            )}
+
+            {step === 1 && (
+               <div>
+                  <h3 className="font-bold text-xl mb-4 text-stone-800">Ваш текущий уровень?</h3>
+                  <p className="text-stone-500 text-sm mb-6">Это настроит сложность ИИ-примеров.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                     {LEVELS.map(l => (
+                        <button key={l} onClick={() => setLevel(l)} className={`p-4 rounded-2xl border-2 font-bold text-center transition-colors text-sm ${level === l ? 'border-teal-500 bg-teal-50 text-teal-700' : 'border-stone-100 text-stone-500'}`}>{l}</button>
+                     ))}
+                  </div>
+               </div>
+            )}
+         </div>
+
+         <div className="p-6 bg-stone-50 border-t border-stone-100 flex gap-3">
+            {step === 1 && <button onClick={() => setStep(0)} className="px-6 bg-stone-200 text-stone-600 font-bold rounded-2xl">Назад</button>}
+            <button onClick={() => { if (step === 0) setStep(1); else onSave(level); }} className="flex-1 bg-teal-600 text-white font-bold py-4 rounded-2xl active:scale-95 transition-transform shadow-[0_8px_20px_rgb(13,148,136,0.2)]">
+               {step === 0 ? 'Продолжить' : 'Начать путь'}
+            </button>
+         </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function AddWordModal({ userProfile, onClose, onSave }: any) {
+  const [original, setOriginal] = useState('');
+  const [status, setStatus] = useState<'idle' | 'analyzing' | 'done'>('idle');
+  const [wordData, setWordData] = useState<Partial<Word>>({});
+
+  const handleAnalyze = async () => {
+    if (!original.trim()) return;
+    setStatus('analyzing');
+    const result = await ApiClient.aiGenerateWord(original, userProfile?.level);
+    setWordData(result);
+    setStatus('done');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[60] flex flex-col justify-end">
+      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{type:'spring', stiffness: 200, damping: 25}} className="bg-white w-full rounded-t-[2rem] p-6 shadow-2xl flex flex-col max-h-[90vh] mx-auto max-w-lg">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold text-stone-800">Новое слово</h2>
+          <button onClick={onClose} className="p-2 bg-stone-100 rounded-full"><X className="w-5 h-5 text-stone-600" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto space-y-6 pb-6 hide-scrollbar">
+          <div className="relative">
+            <input autoFocus placeholder="Введите слово..." value={original} onChange={e => setOriginal(e.target.value)} disabled={status !== 'idle'} className="w-full bg-stone-50 px-6 py-5 rounded-[2rem] text-lg font-bold border border-stone-200 outline-none focus:border-teal-500 transition-colors" />
+          </div>
+
+          {status === 'idle' && (
+            <button onClick={handleAnalyze} disabled={!original.trim()} className="w-full py-5 bg-teal-600 text-white font-bold rounded-[2rem] flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50">
+              Добавить в словарь
+            </button>
+          )}
+
+          {status === 'analyzing' && (
+            <div className="py-12 flex flex-col items-center justify-center text-stone-500 space-y-4">
+               <Loader2 className="w-8 h-8 animate-spin text-teal-600" /> <span className="font-medium">Изучаем контекст...</span>
+            </div>
+          )}
+
+          {status === 'done' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+               <div className="bg-stone-50 p-6 rounded-[2rem] border border-stone-100">
+                  <div className="text-center mb-4">
+                    <h3 className="text-2xl font-black text-stone-800">{original}</h3>
+                    <div className="flex justify-center gap-4 text-sm font-medium text-stone-400 mt-2">
+                        <span>UK: {wordData.transcriptionUK}</span> <span>US: {wordData.transcriptionUS}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3 mt-6">
+                     <div className="font-bold text-stone-800 text-2xl text-center">{wordData.translation}</div>
+                     <div className="text-stone-600 text-center text-sm">{wordData.cambridgeTranslation}</div>
+                  </div>
+
+                  {wordData.examples && wordData.examples.map((ex, i) => (
+                     <div key={i} className="mt-6 p-5 bg-teal-50 border border-teal-100 rounded-2xl">
+                        <div className="font-medium text-teal-900 mb-1">{ex.text}</div>
+                        <div className="text-sm text-teal-700/80">{ex.translation}</div>
+                     </div>
+                  ))}
+               </div>
+               
+               <button onClick={() => onSave({ original, ...wordData, groupIds: [] })} className="w-full py-5 mt-4 bg-stone-900 text-white font-bold rounded-[2rem] active:scale-95 transition-transform">
+                 Сохранить
+               </button>
+            </motion.div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function AddGroupModal({ onClose, onSave }: any) {
+   const [name, setName] = useState('');
    return (
-      <motion.div initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 50 }} className="absolute inset-0 z-20 bg-slate-50 flex flex-col pb-24 border-x border-slate-100 top-0 pt-12">
-         <div className="flex items-center px-4 pb-4 border-b border-slate-200 gap-4 bg-white sticky top-0 z-10">
-            <button onClick={onClose} className="p-2 -ml-2 text-slate-500 active:bg-slate-100 rounded-full"><ArrowLeft className="w-6 h-6" /></button>
-            <div className="flex-1">
-               <h2 className="text-xl font-bold">{group.name}</h2>
-               <p className="text-slate-500 text-sm">{words.length} элементов</p>
+      <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl">
+           <h2 className="text-xl font-bold mb-4 text-stone-800">Новая группа</h2>
+           <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Название группы" className="w-full bg-stone-50 px-4 py-4 rounded-2xl border border-stone-200 outline-none focus:border-teal-500 transition-colors" />
+           <div className="mt-6 flex gap-3">
+              <button onClick={onClose} className="flex-1 py-4 bg-stone-100 text-stone-700 font-bold rounded-2xl active:bg-stone-200">Отмена</button>
+              <button onClick={() => name && onSave(name)} className="flex-1 py-4 bg-teal-600 text-white font-bold rounded-2xl active:bg-teal-700 disabled:opacity-50" disabled={!name}>Создать</button>
+           </div>
+        </motion.div>
+      </div>
+   );
+}
+
+function BulkAddGroupModal({ groups, onClose, onSave }: any) {
+   return (
+      <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex flex-col justify-end max-w-md mx-auto">
+        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="bg-white w-full rounded-t-[2rem] p-6 pb-12 shadow-2xl">
+           <div className="flex justify-between items-center mb-4">
+               <h2 className="text-xl font-bold text-stone-800">Добавить в группу</h2>
+               <button onClick={onClose} className="p-2 bg-stone-100 text-stone-500 rounded-full"><X className="w-5 h-5"/></button>
+           </div>
+           <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+              {groups.length === 0 ? <p className="text-stone-500 text-sm">Сначала создайте группу во вкладке "Группы".</p> : null}
+              {groups.map((g: Group) => (
+                 <button key={g.id} onClick={() => onSave(g.id)} className="w-full text-left p-4 bg-stone-50 rounded-2xl font-medium active:bg-stone-100 flex items-center justify-between text-stone-800">
+                    {g.name} <Plus className="w-5 h-5 text-teal-600"/>
+                 </button>
+              ))}
+           </div>
+        </motion.div>
+      </div>
+   );
+}
+
+function WordEditorModal({ word, groups, onClose, onSave, onDelete, userProfile }: any) {
+   return (
+      <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[100] flex flex-col justify-end max-w-md mx-auto">
+         <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25 }} className="bg-white w-full rounded-t-[2rem] p-6 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex justify-between items-center mb-6">
+               <h2 className="text-xl font-bold text-stone-800 flex items-center gap-2"><Edit3 className="w-5 h-5 text-teal-600"/> Данные слова</h2>
+               <div className="flex items-center gap-2">
+                  <button onClick={onDelete} className="p-2 bg-orange-50 text-orange-500 rounded-full mr-2"><Trash2 className="w-5 h-5" /></button>
+                  <button onClick={onClose} className="p-2 bg-stone-100 rounded-full"><X className="w-5 h-5 text-stone-500" /></button>
+               </div>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-6 pb-6 hide-scrollbar">
+               <div className="bg-stone-50 p-6 rounded-[2rem] border border-stone-100">
+                  <div className="text-center mb-4">
+                    <h3 className="text-2xl font-black text-stone-800">{word.original}</h3>
+                    <div className="flex justify-center gap-4 text-sm font-medium text-stone-400 mt-2">
+                        <span>UK: {word.transcriptionUK}</span> <span>US: {word.transcriptionUS}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3 mt-6">
+                     <div className="font-bold text-stone-800 text-2xl text-center">{word.translation}</div>
+                     <div className="text-stone-600 text-center text-sm">{word.cambridgeTranslation}</div>
+                  </div>
+
+                  {word.examples && word.examples.map((ex: any, i: number) => (
+                     <div key={i} className="mt-6 p-5 bg-teal-50 border border-teal-100 rounded-2xl">
+                        <div className="font-medium text-teal-900 mb-1">{ex.text}</div>
+                        <div className="text-sm text-teal-700/80">{ex.translation}</div>
+                     </div>
+                  ))}
+               </div>
+            </div>
+         </motion.div>
+      </div>
+   );
+}
+
+function GroupView({ group, words, onClose, onRemoveFromGroup, selectedWordIds, setSelectedWordIds, onTrain }: any) {
+   return (
+      <motion.div initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 50 }} className="absolute inset-0 z-20 bg-[#F7F7F5] flex flex-col pb-24 top-0 pt-12 md:pt-8">
+         <div className="flex items-center px-4 md:px-8 pb-4 border-b border-stone-200/50 sticky top-0 z-10 bg-[#F7F7F5]/80 backdrop-blur-xl">
+            <button onClick={onClose} className="p-2 -ml-2 text-stone-500 active:bg-stone-200 rounded-full"><ArrowLeft className="w-6 h-6" /></button>
+            <div className="flex-1 ml-2">
+               <h2 className="text-xl font-bold text-stone-800">{group.name}</h2>
+               <p className="text-stone-500 text-sm">{words.length} элементов</p>
             </div>
          </div>
-         <div className="p-4 space-y-3 overflow-auto flex-1">
+         <div className="p-4 md:p-8 space-y-3 overflow-auto flex-1">
             {words.length > 0 && (
               <div className="flex justify-between items-center px-1 mb-2">
                 <button 
@@ -768,33 +776,33 @@ function GroupView({ group, words, onClose, onRemoveFromGroup, onWordClick, sele
                       setSelectedWordIds(newSet);
                     }
                   }} 
-                  className="text-sm font-bold text-blue-500 flex items-center gap-1 active:opacity-70"
+                  className="text-sm font-bold text-teal-600 flex items-center gap-1 active:opacity-70"
                 >
                   <CheckCircle2 className="w-4 h-4"/> Выбрать все в группе
                 </button>
               </div>
             )}
             {words.length === 0 ? (
-               <div className="text-center text-slate-400 p-8">В этой группе пока нет слов.</div>
+               <div className="text-center text-stone-400 p-8">В этой группе пока нет слов.</div>
             ) : (
                words.map((word: Word) => (
-                  <div key={word.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 active:scale-[0.98] transition-transform">
+                  <div key={word.id} className="bg-white p-5 rounded-[2rem] shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-white/60 flex items-center gap-4 active:scale-[0.98] transition-transform">
                      <button 
                        onClick={() => {
                           const newSet = new Set(selectedWordIds);
                           newSet.has(word.id) ? newSet.delete(word.id) : newSet.add(word.id);
                           setSelectedWordIds(newSet);
                        }}
-                       className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedWordIds.has(word.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}
+                       className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selectedWordIds.has(word.id) ? 'bg-teal-500 border-teal-500' : 'border-stone-300'}`}
                      >
                        {selectedWordIds.has(word.id) && <Check className="w-4 h-4 text-white" />}
                      </button>
-                     <div className="flex-1 cursor-pointer" onClick={() => onWordClick(word.id)}>
-                        <h3 className="text-lg font-bold">{word.original}</h3>
-                        <p className="text-slate-500 text-sm line-clamp-1">{word.translations[0]?.text}</p>
+                     <div className="flex-1 cursor-pointer">
+                        <h3 className="text-lg font-bold text-stone-800">{word.original}</h3>
+                        <p className="text-stone-500 text-sm line-clamp-1">{word.translation}</p>
                         <MasteryBar masteryLevel={word.masteryLevel} />
                      </div>
-                     <button onClick={() => onRemoveFromGroup(word.id)} className="p-2 text-slate-400 hover:text-rose-500 bg-slate-50 rounded-full shrink-0">
+                     <button onClick={() => onRemoveFromGroup(word.id)} className="p-2 text-stone-400 hover:text-orange-500 bg-stone-50 rounded-full shrink-0">
                         <X className="w-5 h-5"/>
                      </button>
                   </div>
@@ -802,10 +810,9 @@ function GroupView({ group, words, onClose, onRemoveFromGroup, onWordClick, sele
             )}
          </div>
 
-         {/* Group Bulk Actions Bar */}
          <AnimatePresence>
             {selectedWordIds.size > 0 && words.some((w: Word) => selectedWordIds.has(w.id)) && (
-               <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="absolute bottom-6 left-4 right-4 bg-slate-900 rounded-2xl shadow-2xl p-2 flex items-center justify-around z-30 border border-slate-700">
+               <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.1)] p-2 flex items-center justify-around z-30 border border-stone-200/50 w-[90%] max-w-sm">
                   <button onClick={() => {
                      words.forEach((w: Word) => {
                         if (selectedWordIds.has(w.id)) onRemoveFromGroup(w.id);
@@ -813,13 +820,13 @@ function GroupView({ group, words, onClose, onRemoveFromGroup, onWordClick, sele
                      const newSet = new Set(selectedWordIds);
                      words.forEach((w: Word) => newSet.delete(w.id));
                      setSelectedWordIds(newSet);
-                  }} className="flex flex-col items-center p-2 text-rose-400 active:opacity-70">
+                  }} className="flex flex-col items-center p-2 text-orange-400 active:opacity-70 flex-1">
                      <Trash2 className="w-5 h-5 mb-1" />
                      <span className="text-[10px] font-bold">Удалить из группы</span>
                   </button>
-                  <button onClick={onTrain} className="flex flex-col items-center p-2 text-emerald-400 active:opacity-70 border-l border-slate-700 pl-4">
-                     <PlayCircle className="w-5 h-5 mb-1 text-emerald-400 fill-emerald-400/20" />
-                     <span className="text-[10px] font-bold">Тренировать ({selectedWordIds.size})</span>
+                  <button onClick={onTrain} className="flex flex-col items-center p-2 text-teal-600 active:opacity-70 border-l border-stone-100 flex-1">
+                     <PlayCircle className="w-5 h-5 mb-1 fill-teal-600/10" />
+                     <span className="text-[10px] font-bold">Учить ({selectedWordIds.size})</span>
                   </button>
                </motion.div>
             )}
@@ -829,327 +836,157 @@ function GroupView({ group, words, onClose, onRemoveFromGroup, onWordClick, sele
 }
 
 // =========================================================================
-// MODALS
+// NEW TRAINING MODES
 // =========================================================================
 
-function WordEditorModal({ word, groups, onClose, onSave, onDelete, onCreateGroup, userProfile }: any) {
-   const [original, setOriginal] = useState(word.original);
-   const [translation, setTranslation] = useState(word.translations[0]?.text || '');
-   const [example, setExample] = useState(word.translations[0]?.examples[0] || '');
-   const [groupIds, setGroupIds] = useState<Set<string>>(new Set(word.groupIds));
+function SessionStats({ stats, onClose }: any) {
+   const accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
+   return (
+      <div className="w-full text-center flex flex-col items-center">
+         <div className="bg-white rounded-[2rem] p-10 w-full shadow-[0_10px_40px_rgb(0,0,0,0.05)] border border-stone-100 mb-8">
+            <div className="text-6xl font-black text-teal-600 mb-2">{accuracy}%</div>
+            <div className="text-stone-400 font-bold mb-8 uppercase tracking-widest text-xs">Точность</div>
+            <div className="flex justify-around text-lg font-bold">
+               <div className="flex flex-col"><span className="text-teal-500 text-2xl">{stats.correct}</span><span className="text-stone-400 text-xs uppercase">Верно</span></div>
+               <div className="flex flex-col"><span className="text-orange-400 text-2xl">{stats.total - stats.correct}</span><span className="text-stone-400 text-xs uppercase">Ошибок</span></div>
+            </div>
+         </div>
+         <button onClick={onClose} className="w-full bg-teal-600 text-white font-bold py-5 rounded-[2rem] shadow-[0_8px_20px_rgb(13,148,136,0.3)]">Завершить</button>
+      </div>
+   );
+}
+
+function ModeConstructor({ words, onProgress, onFinish }: any) {
+   const [idx, setIdx] = useState(0);
+   const [letters, setLetters] = useState<{id:number, char:string}[]>([]);
+   const [answer, setAnswer] = useState<{id:number, char:string}[]>([]);
    
-   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
-   const [newGroupName, setNewGroupName] = useState('');
-   const [isGeneratingExample, setIsGeneratingExample] = useState(false);
+   const word = words[idx];
 
-   const handleSave = () => {
-      onSave({ 
-         ...word, original, groupIds: Array.from(groupIds),
-         translations: [{ text: translation, examples: example ? [example] : [] }]
-      });
-   };
+   useEffect(() => {
+      if(!word) return;
+      const chars = word.original.split('').map((char:string, i:number) => ({ id: i, char }));
+      setLetters(chars.sort(() => Math.random() - 0.5));
+      setAnswer([]);
+   }, [word]);
 
-   const handleRegenerateExample = async () => {
-      setIsGeneratingExample(true);
-      try {
-         const res = await fetch('/.netlify/functions/ai', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'examples', word: original, level: userProfile?.level })
-         });
-         
-         const data = await res.json();
-         if (Array.isArray(data) && data.length > 0) {
-            setExample(data[0]); // Replace example
-         } else if (data?.[0]?.examples?.[0]) {
-            setExample(data[0].examples[0]);
-         }
-      } catch (err) {
-         console.error(err);
+   if (!word) return null;
+
+   const handlePick = (item: any) => {
+      setLetters(letters.filter(l => l.id !== item.id));
+      const newAnswer = [...answer, item];
+      setAnswer(newAnswer);
+
+      if (newAnswer.length === word.original.length) {
+         const isCorrect = newAnswer.map(a => a.char).join('') === word.original;
+         onProgress(word.id, isCorrect);
+         setTimeout(() => { if (idx >= words.length - 1) onFinish(); else setIdx(c => c + 1); }, 1000);
       }
-      setIsGeneratingExample(false);
    };
 
+   const isFull = answer.length === word.original.length;
+   const isCorrect = answer.map(a => a.char).join('') === word.original;
+
    return (
-      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex flex-col justify-end max-w-md mx-auto">
-         <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25 }} className="bg-white w-full rounded-t-[2rem] p-6 shadow-2xl flex flex-col h-[85vh]">
-            <div className="flex justify-between items-center mb-6">
-               <h2 className="text-xl font-bold flex items-center gap-2"><Edit3 className="w-5 h-5 text-blue-500"/> Данные слова</h2>
-               <div className="flex items-center gap-2">
-                  <button onClick={onDelete} className="p-2 bg-rose-50 text-rose-500 rounded-full mr-2"><Trash2 className="w-5 h-5" /></button>
-                  <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-500" /></button>
-               </div>
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-4 pb-6 px-1 hide-scrollbar">
-               
-               <div className="bg-slate-50 p-4 rounded-2xl mb-4 border border-slate-100">
-                  <MasteryBar masteryLevel={word.masteryLevel} showLabel={true} />
-                  <div className="flex flex-row justify-between text-xs font-bold text-slate-400 mt-3 pt-3 border-t border-slate-200">
-                     <span className="text-emerald-500">Верно: {word.correctAnswers}</span>
-                     <span className="text-rose-500">Ошибок: {word.incorrectAnswers}</span>
-                  </div>
-               </div>
-
-               <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Слово / Выражение</label>
-                  <input value={original} onChange={e => setOriginal(e.target.value)} className="w-full bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 outline-none focus:border-blue-500 text-lg font-medium" />
-               </div>
-               <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Перевод</label>
-                  <input value={translation} onChange={e => setTranslation(e.target.value)} className="w-full bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 outline-none focus:border-blue-500" />
-               </div>
-               <div className="space-y-1 relative">
-                  <div className="flex justify-between items-center">
-                     <label className="text-xs font-bold text-slate-500 uppercase">Пример употребления</label>
-                     <button onClick={handleRegenerateExample} disabled={isGeneratingExample} className="text-[10px] uppercase font-bold text-blue-500 bg-blue-50 px-2 py-1 rounded-md flex gap-1 items-center active:scale-95">
-                        {isGeneratingExample ? <Loader2 className="w-3 h-3 animate-spin"/> : <Brain className="w-3 h-3"/>} Заменить ИИ
-                     </button>
-                  </div>
-                  <textarea value={example} onChange={e => setExample(e.target.value)} className="w-full bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 outline-none focus:border-blue-500 min-h-[80px]" />
-               </div>
-
-               <div className="pt-4 border-t border-slate-100 mt-4">
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-3 block">Наличие в группах</label>
-                  <div className="flex flex-wrap gap-2 mb-4">
-                     {groups.map((g: Group) => (
-                        <button key={g.id} onClick={() => {
-                              const s = new Set(groupIds); s.has(g.id) ? s.delete(g.id) : s.add(g.id); setGroupIds(s);
-                           }}
-                           className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-2 ${groupIds.has(g.id) ? 'bg-indigo-500 border-indigo-500 text-white' : 'bg-white border-slate-200 text-slate-600'}`}
-                        >
-                           {groupIds.has(g.id) && <Check className="w-4 h-4"/>} {g.name}
-                        </button>
-                     ))}
-                  </div>
-                  {isCreatingGroup ? (
-                     <div className="flex gap-2">
-                        <input autoFocus value={newGroupName} onChange={e => setNewGroupName(e.target.value)} placeholder="Имя группы" className="flex-1 bg-slate-50 px-4 py-3 rounded-xl border outline-none focus:border-indigo-500" />
-                        <button onClick={() => {
-                              if (newGroupName) {
-                                 const newId = onCreateGroup(newGroupName, word.category);
-                                 setGroupIds(new Set([...Array.from(groupIds), newId]));
-                                 setNewGroupName(''); setIsCreatingGroup(false);
-                              }
-                           }} className="bg-indigo-500 text-white px-4 py-3 rounded-xl font-bold"
-                        >OK</button>
-                     </div>
-                  ) : (
-                     <button onClick={() => setIsCreatingGroup(true)} className="text-indigo-500 font-bold text-sm bg-indigo-50 px-4 py-2 rounded-xl flex items-center gap-2"><Plus className="w-4 h-4"/> Новая группа</button>
-                  )}
-               </div>
-            </div>
-            <button onClick={handleSave} className="w-full py-4 bg-blue-500 text-white font-bold rounded-2xl active:bg-blue-600 transition-colors text-lg mt-4 shrink-0">
-               Сохранить изменения
-            </button>
-         </motion.div>
-      </div>
-   );
-}
-
-
-function AddGroupModal({ onClose, onSave }: any) {
-   const [name, setName] = useState('');
-   return (
-      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
-           <h2 className="text-xl font-bold mb-4">Новая группа</h2>
-           <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Название группы" className="w-full bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 outline-none focus:border-indigo-500 transition-colors" />
-           <div className="mt-6 flex gap-3">
-              <button onClick={onClose} className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold rounded-xl active:bg-slate-200">Отмена</button>
-              <button onClick={() => name && onSave(name)} className="flex-1 py-3 bg-indigo-500 text-white font-bold rounded-xl active:bg-indigo-600 disabled:opacity-50" disabled={!name}>Создать</button>
-           </div>
-        </motion.div>
-      </div>
-   );
-}
-
-function BulkAddGroupModal({ groups, onClose, onSave }: any) {
-   return (
-      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex flex-col justify-end max-w-md mx-auto">
-        <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="bg-white w-full rounded-t-[2rem] p-6 pb-12 shadow-2xl">
-           <div className="flex justify-between items-center mb-4">
-               <h2 className="text-xl font-bold">Добавить в группу</h2>
-               <button onClick={onClose} className="p-2 bg-slate-100 text-slate-500 rounded-full"><X className="w-5 h-5"/></button>
-           </div>
-           <div className="space-y-2">
-              {groups.length === 0 ? <p className="text-slate-500 text-sm">Сначала создайте группу в вкладке "Группы".</p> : null}
-              {groups.map((g: Group) => (
-                 <button key={g.id} onClick={() => onSave(g.id)} className="w-full text-left p-4 bg-slate-50 rounded-xl font-medium active:bg-slate-100 hover:bg-slate-100 flex items-center justify-between">
-                    {g.name} <Plus className="w-5 h-5 text-indigo-500"/>
-                 </button>
-              ))}
-           </div>
-        </motion.div>
-      </div>
-   );
-}
-
-function OnboardingModal({ user, onSave }: any) {
-  const [step, setStep] = useState(0);
-  const [level, setLevel] = useState('Beginner');
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden transform relative">
-         <div className="p-8">
-            <h2 className="text-3xl font-black mb-6">Добро пожаловать в Words!</h2>
-            
-            {step === 0 && (
-               <div className="space-y-4">
-                  <div className="flex items-start gap-4">
-                     <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-500 shrink-0"><BookOpen className="w-5 h-5"/></div>
-                     <div><h3 className="font-bold">Умный словарь</h3><p className="text-slate-500 text-sm">ИИ поможет подобрать правильные переводы и примеры предложений.</p></div>
-                  </div>
-                  <div className="flex items-start gap-4">
-                     <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-500 shrink-0"><PlayCircle className="w-5 h-5"/></div>
-                     <div><h3 className="font-bold">4 режима тренировки</h3><p className="text-slate-500 text-sm">Карточки, Викторина, Фразы (с проверкой ИИ) и Выживание.</p></div>
-                  </div>
-                  <div className="flex items-start gap-4">
-                     <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-500 shrink-0"><Layers className="w-5 h-5"/></div>
-                     <div><h3 className="font-bold">Синхронизация</h3><p className="text-slate-500 text-sm">Ваши слова и группы сохраняются в облаке и доступны на любом устройстве.</p></div>
-                  </div>
-               </div>
-            )}
-
-            {step === 1 && (
-               <div>
-                  <h3 className="font-bold text-xl mb-4">Какой у вас уровень английского?</h3>
-                  <p className="text-slate-500 mb-6">Это поможет ИИ подбирать правильные примеры и дистракторы в режимах обучения.</p>
-                  
-                  <div className="space-y-3">
-                     {['Beginner', 'Intermediate', 'Advanced'].map(l => (
-                        <button key={l} onClick={() => setLevel(l)} className={`w-full p-4 rounded-2xl border-2 font-bold text-left transition-colors ${level === l ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-100 hover:border-slate-200'}`}>
-                           {l}
-                        </button>
-                     ))}
-                  </div>
-               </div>
-            )}
+      <div className="w-full flex flex-col items-center">
+         <span className="text-stone-400 font-bold mb-8">{idx + 1} / {words.length}</span>
+         <div className="text-xl font-bold text-stone-500 mb-8">{word.translation}</div>
+         
+         <div className={`flex flex-wrap justify-center gap-2 mb-12 min-h-[60px] p-4 rounded-3xl ${isFull ? (isCorrect ? 'bg-teal-50 border-teal-200 border' : 'bg-orange-50 border-orange-200 border') : 'bg-white border-2 border-dashed border-stone-200'}`}>
+            {answer.map(a => (
+               <motion.div layoutId={`char-${a.id}`} key={a.id} className={`w-10 h-12 flex items-center justify-center font-bold text-xl rounded-xl text-white ${isFull ? (isCorrect ? 'bg-teal-500' : 'bg-orange-400') : 'bg-stone-800'}`}>
+                  {a.char}
+               </motion.div>
+            ))}
          </div>
 
-         <div className="p-4 bg-slate-50 border-t border-slate-100 p-8 pt-4">
-            <button onClick={() => { if (step === 0) setStep(1); else onSave(level); }} className="w-full bg-slate-900 text-white font-bold py-4 rounded-2xl active:scale-95 transition-transform">
-               {step === 0 ? 'Далее' : 'Начать обучение'}
-            </button>
+         <div className="flex flex-wrap justify-center gap-2">
+            {letters.map(l => (
+               <motion.div layoutId={`char-${l.id}`} key={l.id} onClick={() => handlePick(l)} className="w-12 h-14 bg-white border border-stone-200 shadow-sm flex items-center justify-center font-bold text-xl rounded-xl text-stone-800 cursor-pointer active:scale-90">
+                  {l.char}
+               </motion.div>
+            ))}
          </div>
-      </motion.div>
-    </motion.div>
-  );
+      </div>
+   );
 }
 
-function AddWordModal({ category, groups, onClose, onSave, userProfile }: any) {
-  const [original, setOriginal] = useState('');
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
-  const [status, setStatus] = useState<'idle' | 'analyzing' | 'done'>('idle');
-  const [translations, setTranslations] = useState<Translation[]>([]);
+function ModeBrainstorm({ words, onProgress, onFinish }: any) {
+   const [phase, setPhase] = useState<1|2|3>(1);
+   const [pool, setPool] = useState<any[]>(words);
+   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const handleAnalyze = async () => {
-    if (!original.trim()) return;
-    setStatus('analyzing');
-    const results = await ApiClient.aiGenerateTranslations(original, category, userProfile?.level);
-    setTranslations(results);
-    setStatus('done');
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex flex-col justify-end max-w-md mx-auto">
-      <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="bg-white w-full rounded-t-[2rem] p-6 shadow-2xl flex flex-col max-h-[90vh]">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Добавить новое слово</h2>
-          <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto space-y-6 pb-6">
-          <div>
-            <div className="relative">
-              <input autoFocus placeholder="..." value={original} onChange={e => setOriginal(e.target.value)} disabled={status !== 'idle'} className="w-full bg-slate-50 pl-12 pr-4 py-4 rounded-2xl text-lg font-medium border outline-none focus:border-blue-500" />
-              <Search className="absolute left-4 top-4.5 text-slate-400 w-5 h-5" />
+   if (phase === 1) {
+      return (
+         <div className="w-full">
+            <h2 className="text-2xl font-black text-stone-800 mb-2">Брейншторм</h2>
+            <p className="text-stone-500 mb-6">Выберите слова, которые хотите прогнать через усиленный цикл тренировки.</p>
+            <div className="space-y-2 mb-8 max-h-[50vh] overflow-y-auto">
+               {pool.map(w => (
+                  <div key={w.id} onClick={() => { const s=new Set(selected); s.has(w.id)?s.delete(w.id):s.add(w.id); setSelected(s); }} className={`p-4 rounded-2xl flex justify-between font-bold cursor-pointer transition-colors ${selected.has(w.id) ? 'bg-purple-100 text-purple-700' : 'bg-white text-stone-700'}`}>
+                     {w.original} {selected.has(w.id) && <Check className="w-5 h-5"/>}
+                  </div>
+               ))}
             </div>
-            {status === 'idle' && (
-              <button onClick={handleAnalyze} disabled={!original.trim()} className="mt-4 w-full py-4 bg-slate-900 text-white font-bold rounded-2xl flex items-center justify-center gap-2">
-                <Brain className="w-5 h-5"/> Анализировать ИИ
-              </button>
-            )}
-            {status === 'analyzing' && (
-              <div className="mt-8 flex flex-col items-center justify-center text-slate-500 space-y-4">
-                 <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-                 <span className="font-medium">ИИ анализирует...</span>
-              </div>
-            )}
-          </div>
+            <button onClick={() => { if(selected.size>0) setPhase(2); else alert('Выберите слова'); }} className="w-full bg-purple-600 text-white font-bold py-5 rounded-[2rem]">Начать цикл ({selected.size})</button>
+         </div>
+      );
+   }
 
-          {status === 'done' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-               <div className="space-y-3">
-                   {translations.map((tr, i) => (
-                      <div key={i} className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
-                         <div className="font-bold text-blue-900 mb-2">{tr.text}</div>
-                         <div className="text-blue-700/80 text-sm italic">"{tr.examples[0]}"</div>
-                      </div>
-                   ))}
-               </div>
-               {groups.length > 0 && (
-                 <div>
-                    <h3 className="text-sm font-bold text-slate-400 mb-3">Группы</h3>
-                    <div className="flex flex-wrap gap-2">
-                       {groups.map((g: Group) => (
-                         <button key={g.id} onClick={() => {
-                              const s = new Set(selectedGroups); s.has(g.id) ? s.delete(g.id) : s.add(g.id); setSelectedGroups(s);
-                           }} className={`px-4 py-2 rounded-xl text-sm border ${selectedGroups.has(g.id) ? 'bg-indigo-500 border-indigo-500 text-white' : 'bg-white border-slate-200'}`}>{g.name}</button>
-                       ))}
-                    </div>
-                 </div>
-               )}
-               <button onClick={() => onSave({ original, translations, category, groupIds: Array.from(selectedGroups) })} className="w-full py-4 bg-blue-500 text-white font-bold rounded-2xl">
-                 Сохранить в словарь
-               </button>
-            </motion.div>
-          )}
-        </div>
-      </motion.div>
-    </div>
-  );
+   const activeWords = words.filter((w:any) => selected.has(w.id));
+
+   if (phase === 2) {
+      return (
+         <div className="w-full text-center">
+            <h3 className="text-stone-400 font-bold mb-8 uppercase tracking-widest text-xs">Этап 1: Карточки</h3>
+            <ModeFlashcards words={activeWords} onProgress={()=>{}} onFinish={() => setPhase(3)} />
+         </div>
+      );
+   }
+
+   if (phase === 3) {
+      return (
+         <div className="w-full text-center">
+            <h3 className="text-stone-400 font-bold mb-8 uppercase tracking-widest text-xs">Этап 2: Правописание</h3>
+            <ModeConstructor words={activeWords} onProgress={onProgress} onFinish={onFinish} />
+         </div>
+      );
+   }
+
+   return null;
 }
-
-
-// --- TRAINING MODES ---
 
 function ModeFlashcards({ words, onProgress, onFinish }: any) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
-  const [direction, setDirection] = useState<'forward' | 'reverse'>('forward');
   const word = words[currentIndex];
 
   const handleAnswer = (isCorrect: boolean) => {
     onProgress(word.id, isCorrect);
-    if (currentIndex >= words.length - 1) { onFinish(); return; }
-    setIsFlipped(false);
-    setTimeout(() => setCurrentIndex(c => c + 1), 150);
+    if (currentIndex >= words.length - 1) onFinish();
+    else { setIsFlipped(false); setTimeout(() => setCurrentIndex(c => c + 1), 150); }
   };
 
   if (!word) return null;
   return (
-    <div className="w-full max-w-sm flex flex-col items-center mx-auto">
-      <div className="mb-8 flex items-center justify-between w-full">
-         <span className="text-slate-400 font-medium">{currentIndex + 1} / {words.length}</span>
-         <button onClick={() => setDirection(d => d === 'forward' ? 'reverse' : 'forward')} className="bg-slate-800 px-4 py-2 rounded-full text-sm text-white border border-slate-700">Изменить направление</button>
-      </div>
-
-      <div className="w-full h-96 relative perspective-1000 cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-         <motion.div animate={{ rotateY: isFlipped ? 180 : 0 }} transition={{ type: "spring", stiffness: 260, damping: 20 }} className="w-full h-full relative [transform-style:preserve-3d]">
-            <div className="absolute inset-0 [backface-visibility:hidden] bg-white rounded-[2.5rem] flex items-center justify-center p-8 text-center text-slate-800 shadow-2xl">
-               <h2 className="text-4xl font-bold">{direction === 'forward' ? word.original : word.translations[0]?.text}</h2>
+    <div className="w-full flex flex-col items-center">
+      <span className="text-stone-400 font-bold mb-8">{currentIndex + 1} / {words.length}</span>
+      <div className="w-full h-96 relative cursor-pointer perspective-1000" onClick={() => setIsFlipped(!isFlipped)}>
+         <motion.div animate={{ rotateY: isFlipped ? 180 : 0 }} transition={{ type: "spring", stiffness: 100, damping: 20 }} className="w-full h-full relative [transform-style:preserve-3d]">
+            <div className="absolute inset-0 [backface-visibility:hidden] bg-white rounded-[2rem] shadow-[0_10px_40px_rgb(0,0,0,0.05)] border border-stone-100 flex flex-col items-center justify-center p-8 text-center">
+               <h2 className="text-4xl font-black text-stone-800">{word.original}</h2>
+               <div className="text-stone-400 mt-4 font-medium">[{word.transcriptionUK}]</div>
             </div>
-            <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-blue-600 rounded-[2.5rem] flex flex-col items-center justify-center p-8 text-center text-white shadow-2xl">
-               <h2 className="text-3xl font-bold mb-4">{direction === 'forward' ? word.translations[0]?.text : word.original}</h2>
-               {direction === 'forward' && <p className="italic text-blue-100 text-sm">"{word.translations[0]?.examples[0]}"</p>}
+            <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-teal-600 rounded-[2rem] shadow-[0_10px_40px_rgb(13,148,136,0.2)] flex flex-col items-center justify-center p-8 text-center text-white">
+               <h2 className="text-3xl font-bold mb-2">{word.translation}</h2>
+               <p className="text-teal-100/80 text-sm mb-4">{word.cambridgeTranslation}</p>
+               {word.examples?.[0] && <p className="italic text-teal-50 bg-black/10 p-3 rounded-xl text-sm">"{word.examples[0].text}"</p>}
             </div>
          </motion.div>
       </div>
-      
       <div className="mt-12 w-full flex gap-4">
-         <button onClick={() => handleAnswer(false)} className="flex-1 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"><XOctagon className="w-5 h-5"/> Не вспомнил</button>
-         <button onClick={() => handleAnswer(true)} className="flex-1 py-4 bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"><CheckCircle2 className="w-5 h-5" /> Вспомнил</button>
+         <button onClick={() => handleAnswer(false)} className="flex-1 py-5 bg-orange-50 text-orange-500 font-bold rounded-2xl active:scale-95 transition-transform">Не помню</button>
+         <button onClick={() => handleAnswer(true)} className="flex-1 py-5 bg-teal-50 text-teal-600 font-bold rounded-2xl active:scale-95 transition-transform">Вспомнил</button>
       </div>
     </div>
   );
@@ -1166,7 +1003,7 @@ function ModeQuiz({ words, onProgress, onFinish }: any) {
     if (!word) return;
     const load = async () => {
       setOptions([]); setAnsIdx(null);
-      const c = word.translations[0]?.text || '';
+      const c = word.translation || '';
       setCorrect(c);
       const dist = await ApiClient.aiGenerateDistractors(word.original, c);
       setOptions([...dist, c].sort(() => Math.random() - 0.5));
@@ -1177,20 +1014,20 @@ function ModeQuiz({ words, onProgress, onFinish }: any) {
   if (!word) return null;
   return (
     <div className="w-full max-w-sm flex flex-col">
-       <span className="text-slate-400 font-medium text-center mb-8">{currentIndex + 1} / {words.length}</span>
-       <div className="bg-slate-800 rounded-3xl p-8 text-center mb-8 border border-slate-700 shadow-xl">
-          <h2 className="text-3xl font-bold text-white">{word.original}</h2>
+       <span className="text-stone-400 font-medium text-center mb-8">{currentIndex + 1} / {words.length}</span>
+       <div className="bg-white rounded-[2rem] p-8 text-center mb-8 border border-stone-100 shadow-sm">
+          <h2 className="text-3xl font-black text-stone-800">{word.original}</h2>
        </div>
        {options.length === 0 ? (
-          <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-blue-500"/></div>
+          <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-teal-600"/></div>
        ) : (
           <div className="space-y-3">
              {options.map((opt, i) => {
-                let stateClass = "bg-white text-slate-800";
+                let stateClass = "bg-white text-stone-800 border-stone-200";
                 if (ansIdx !== null) {
-                   if (opt === correct) stateClass = "bg-emerald-500 text-white border-transparent";
-                   else if (i === ansIdx) stateClass = "bg-rose-500 text-white border-transparent";
-                   else stateClass = "bg-white/50 text-slate-500 opacity-50";
+                   if (opt === correct) stateClass = "bg-teal-500 text-white border-transparent";
+                   else if (i === ansIdx) stateClass = "bg-orange-400 text-white border-transparent";
+                   else stateClass = "bg-white/50 text-stone-400 opacity-50";
                 }
                 return (
                   <button key={i} onClick={() => { 
@@ -1199,7 +1036,7 @@ function ModeQuiz({ words, onProgress, onFinish }: any) {
                          onProgress(word.id, opt === correct);
                          setTimeout(() => { if(currentIndex >= words.length-1) onFinish(); else setCurrentIndex(c=>c+1); }, 1500) 
                       } 
-                   }} className={`w-full p-5 rounded-2xl font-bold text-lg active:scale-[0.98] transition-all shadow-sm ${stateClass}`}>
+                   }} className={`w-full p-5 rounded-2xl border font-bold text-lg active:scale-[0.98] transition-all shadow-sm ${stateClass}`}>
                      {opt}
                   </button>
                 );
@@ -1219,16 +1056,17 @@ function ModeSentence({ words, onProgress, onFinish }: any) {
  
    if (!word) return null;
    return (
-     <div className="w-full max-w-sm flex flex-col relative h-[80vh]">
+     <div className="w-full flex flex-col h-[80vh]">
         <div className="flex-1">
-          <span className="text-slate-400 font-medium text-center block mb-6">{currentIndex + 1} / {words.length}</span>
-          <div className="bg-slate-800 rounded-3xl p-8 mb-6 border border-slate-700 shadow-xl">
-            <h2 className="text-3xl font-bold text-white mb-2">{word.original}</h2>
-            <p className="text-slate-400 italic font-medium">{word.translations[0]?.text}</p>
+          <span className="text-stone-400 font-bold text-center block mb-6">{currentIndex + 1} / {words.length}</span>
+          <div className="bg-white rounded-[2rem] p-8 mb-6 shadow-sm border border-stone-100 text-center">
+            <h2 className="text-3xl font-black text-stone-800 mb-2">{word.original}</h2>
+            <p className="text-stone-400 font-medium">{word.translation}</p>
           </div>
-          <textarea autoFocus value={input} onChange={e => { setInput(e.target.value); setStatus('idle'); }} placeholder="Напишите предложение..." disabled={status === 'checking' || status === 'correct'} className="w-full bg-white/10 border border-slate-700 focus:border-blue-500 text-white p-5 rounded-2xl min-h-[120px] outline-none" />
+          <textarea autoFocus value={input} onChange={e => { setInput(e.target.value); setStatus('idle'); }} placeholder="Составьте предложение с этим словом..." disabled={status === 'checking' || status === 'correct'} className="w-full bg-stone-50 border border-stone-200 focus:border-teal-500 text-stone-800 p-6 rounded-[2rem] min-h-[140px] outline-none font-medium resize-none" />
+          
           {status !== 'idle' && status !== 'checking' && (
-             <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className={`mt-4 p-4 rounded-2xl flex items-start gap-3 ${status === 'correct' ? 'bg-emerald-500/20 text-emerald-200' : 'bg-rose-500/20 text-rose-200'}`}>
+             <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className={`mt-4 p-5 rounded-2xl flex gap-3 ${status === 'correct' ? 'bg-teal-50 text-teal-700' : 'bg-orange-50 text-orange-600'}`}>
                 {status === 'correct' ? <CheckCircle2 className="w-6 h-6 shrink-0"/> : <XCircle className="w-6 h-6 shrink-0"/>}
                 <p className="font-medium text-sm leading-relaxed">{fb}</p>
              </motion.div>
@@ -1241,68 +1079,10 @@ function ModeSentence({ words, onProgress, onFinish }: any) {
                 setFb(r.feedback); 
                 setStatus(r.isCorrect ? 'correct' : 'incorrect'); 
                 onProgress(word.id, r.isCorrect);
-             }} disabled={!input} className="w-full bg-blue-500 text-white font-bold py-4 rounded-2xl flex gap-2 justify-center"><Brain className="w-5 h-5"/> Проверить ИИ</button>}
-           {status === 'checking' && <div className="w-full bg-slate-800 text-blue-400 font-bold py-4 rounded-2xl flex justify-center"><Loader2 className="animate-spin w-5 h-5" /> Анализируем...</div>}
-           {(status === 'correct' || status === 'incorrect') && <button onClick={() => { if(currentIndex >= words.length-1) onFinish(); else { setCurrentIndex(c=>c+1); setInput(''); setStatus('idle'); } }} className="w-full bg-slate-700 text-white font-bold py-4 rounded-2xl">Дальше <ArrowRight className="w-5 h-5 inline"/></button>}
+             }} disabled={!input} className="w-full bg-indigo-600 text-white font-bold py-5 rounded-[2rem] flex gap-2 justify-center shadow-[0_8px_20px_rgb(79,70,229,0.2)]"><Brain className="w-5 h-5"/> Проверить ИИ</button>}
+           {status === 'checking' && <div className="w-full bg-stone-100 text-stone-500 font-bold py-5 rounded-[2rem] flex justify-center"><Loader2 className="animate-spin w-5 h-5" /> Анализируем...</div>}
+           {(status === 'correct' || status === 'incorrect') && <button onClick={() => { if(currentIndex >= words.length-1) onFinish(); else { setCurrentIndex(c=>c+1); setInput(''); setStatus('idle'); } }} className="w-full bg-stone-800 text-white font-bold py-5 rounded-[2rem]">Продолжить <ArrowRight className="w-5 h-5 inline"/></button>}
         </div>
      </div>
    );
  }
-
-function ModeTimeAttack({ words, onProgress, onFinish }: any) {
-   const [time, setTime] = useState(60);
-   const [score, setScore] = useState(0);
-   const [idx, setIdx] = useState(0);
-   const [input, setInput] = useState('');
-   const [flash, setFlash] = useState<null | 'success' | 'error'>(null);
-   const [shuffledWords, setShuffledWords] = useState<any[]>([]);
-
-   useEffect(() => {
-      setShuffledWords([...words].sort(() => Math.random() - 0.5));
-   }, [words]);
-
-   useEffect(() => {
-     if (time <= 0 || (shuffledWords.length > 0 && idx >= shuffledWords.length)) return;
-     const t = setInterval(() => setTime(prev => prev - 1), 1000);
-     return () => clearInterval(t);
-   }, [time, idx, shuffledWords.length]);
- 
-   if (time <= 0 || (shuffledWords.length > 0 && idx >= shuffledWords.length)) {
-      return (
-         <div className="text-center w-full max-w-sm">
-            <Timer className="w-20 h-20 text-rose-500 mx-auto mb-6" />
-            <h2 className="text-4xl text-white font-bold mb-2">{time <= 0 ? 'Время вышло!' : 'Слова пройдены!'}</h2>
-            <p className="text-slate-400 mb-12 text-lg">Ваш счет: <span className="text-emerald-400 font-bold">{score}</span></p>
-            <button onClick={onFinish} className="bg-white text-slate-900 w-full py-4 rounded-full font-bold active:scale-95 transition-transform">Выход</button>
-         </div>
-      );
-   }
-
-   const word = shuffledWords[idx];
-   if (!word) return null;
-
-   return (
-     <div className="w-full max-w-sm flex flex-col items-center">
-        <div className="text-center mb-8 border-4 border-slate-700 w-24 h-24 flex items-center justify-center rounded-full"><span className={`text-4xl font-mono font-bold ${time <= 10 ? 'text-rose-500 animate-pulse' : 'text-white'}`}>{time}</span></div>
-        <motion.div animate={flash === 'error' ? { x: [-10, 10, -10, 10, 0] } : {}} className={`w-full shadow-2xl bg-slate-800 rounded-3xl p-10 text-center border-2 ${flash === 'success' ? 'border-emerald-500 bg-emerald-500/10' : flash === 'error' ? 'border-rose-500 bg-rose-500/10' : 'border-slate-700'}`}>
-           <h2 className="text-4xl font-black text-white">{word.original}</h2>
-        </motion.div>
-        <input autoFocus value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => {
-           if(e.key==='Enter') {
-              const isCorrect = word.translations.some((t: any) => t.text.toLowerCase().includes(input.toLowerCase().trim()));
-              onProgress(word.id, isCorrect);
-              if (isCorrect) {
-                 setScore(s=>s+100); 
-                 setFlash('success'); 
-                 setInput(''); 
-                 setTimeout(()=>{setFlash(null);setIdx(c=>c+1);},200);
-              } else { 
-                 setFlash('error'); 
-                 setTimeout(()=>setFlash(null),300);
-                 setTimeout(()=>{setIdx(c=>c+1); setInput('');}, 300);
-              }
-           }
-        }} placeholder="Впишите перевод..." className="w-full bg-slate-800 border border-slate-700 text-white text-center p-5 rounded-2xl text-2xl font-bold mt-8 outline-none focus:border-blue-500" />
-     </div>
-   );
-}
