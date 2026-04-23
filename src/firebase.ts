@@ -7,12 +7,12 @@ import { getAuth } from "firebase/auth";
 // Пока настроек нет, приложение будет выдавать предупреждения в консоль, 
 // но код адаптирован под то, чтобы вы могли легко его добавить.
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSy_YOUR_API_KEY",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "your-project-id.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "your-project-id",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "your-project-id.appspot.com",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "123456789",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:123456789:web:abcdef"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDmM0cLvfb-_EsgH_mw8SG3xCcOW6YvFTU",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "appeng-cafd9.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "appeng-cafd9",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "appeng-cafd9.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "562959685851",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:562959685851:web:45cf3c19adb27f09e1d4fe"
 };
 
 // Инициализация Firebase
