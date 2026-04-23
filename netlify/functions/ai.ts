@@ -1,7 +1,6 @@
 import { Config, Context } from "@netlify/functions";
 
 export default async (req: Request, context: Context) => {
-  // Настройка CORS для доступа из браузера
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -17,7 +16,6 @@ export default async (req: Request, context: Context) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Ваши ключи Yandex Cloud
   const YANDEX_API_KEY = "AQVN050LifyouJDKmjXZRUh7n7WWQSa4w7nVCfhY";
   const YANDEX_FOLDER_ID = "b1gt0i8u6inlaoafpmos";
 
@@ -28,10 +26,13 @@ export default async (req: Request, context: Context) => {
     let userPrompt = "";
 
     if (action === 'translate') {
-      systemPrompt = `Ты профессиональный лингвист. Твоя задача дать исчерпывающую информацию о слове/выражении "${word}". 
+      systemPrompt = `Ты профессиональный лингвист. Твоя задача дать информацию о слове/выражении. 
+ВАЖНО (Защита от опечаток): Если пользователь ввел слово с ошибкой (например aple), исправь его на правильное (apple) и верни в поле "original".
+Транскрипции: Обязательно учитывай разницу между британским (UK) и американским (US) произношением (например, наличие звука /r/ или разные гласные).
 Уровень ученика: ${level || 'Intermediate'}. Адаптируй сложность примеров.
 Формат ответа строго JSON объект (без маркдауна): 
 {
+  "original": "Исправленное слово на английском",
   "translation": "Краткий перевод в 1-2 слова",
   "cambridgeTranslation": "Развернутый перевод в стиле Cambridge Dictionary",
   "transcriptionUK": "Британская транскрипция",
@@ -50,6 +51,10 @@ export default async (req: Request, context: Context) => {
 2. Контекст (правильно ли использовано слово).
 Верни JSON: {"isCorrect": boolean, "feedback": "Твой комментарий"}. Без маркдауна.`;
       userPrompt = sentence;
+    } else if (action === 'example') {
+      systemPrompt = `Придумай НОВЫЙ интересный пример использования слова "${word}". Уровень ученика: ${level || 'Intermediate'}.
+Верни строго JSON объект: {"text": "Пример на английском", "translation": "Перевод на русский"}. Без маркдауна.`;
+      userPrompt = word;
     }
 
     const response = await fetch("https://llm.api.cloud.yandex.net/foundationModels/v1/completion", {
@@ -60,7 +65,7 @@ export default async (req: Request, context: Context) => {
       },
       body: JSON.stringify({
         modelUri: `gpt://${YANDEX_FOLDER_ID}/yandexgpt/latest`, 
-        completionOptions: { stream: false, temperature: 0.3, maxTokens: 1500 },
+        completionOptions: { stream: false, temperature: action === 'example' ? 0.7 : 0.3, maxTokens: 1500 },
         messages: [
           { role: "system", text: systemPrompt },
           { role: "user", text: userPrompt }
@@ -81,7 +86,7 @@ export default async (req: Request, context: Context) => {
       const cleanedText = textOutput.replace(/```json/g, '').replace(/```/g, '').trim();
       parsedResult = JSON.parse(cleanedText);
     } catch (e) {
-      parsedResult = { translation: "Ошибка парсинга", examples: [] };
+      parsedResult = action === 'distractors' ? [] : { translation: "Ошибка парсинга", examples: [] };
     }
 
     return new Response(JSON.stringify(parsedResult), {
