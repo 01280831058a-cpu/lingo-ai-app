@@ -43,8 +43,8 @@ export default async (req: Request, context: Context) => {
 }`;
       userPrompt = word;
     } else if (action === 'batch_distractors') {
-      systemPrompt = `Ты создаешь викторину. Для каждого переданного слова придумай 3 НЕПРАВИЛЬНЫХ, но правдоподобных варианта перевода на русском. 
-Верни строго JSON-массив объектов: [{"id": "id_слова", "distractors": ["вар1", "вар2", "вар3"]}]. Без маркдауна.`;
+      systemPrompt = `Ты создаешь викторину. Для каждого слова из списка придумай 3 НЕПРАВИЛЬНЫХ варианта перевода на русском языке. 
+Верни СТРОГО JSON-массив объектов в формате: [{"id": "идентификатор", "distractors": ["вар1", "вар2", "вар3"]}]. Без маркдауна и лишнего текста.`;
       userPrompt = JSON.stringify(words.map((w:any) => ({ id: w.id, word: w.original, translation: w.translation })));
     } else if (action === 'check') {
       systemPrompt = `Проверь предложение со словом "${word}". Верни JSON: {"isCorrect": boolean, "feedback": "Комментарий"}. Без маркдауна.`;
@@ -62,7 +62,7 @@ export default async (req: Request, context: Context) => {
       },
       body: JSON.stringify({
         modelUri: `gpt://${YANDEX_FOLDER_ID}/yandexgpt/latest`, 
-        completionOptions: { stream: false, temperature: 0.3, maxTokens: 1500 },
+        completionOptions: { stream: false, temperature: 0.3, maxTokens: 2000 },
         messages: [{ role: "system", text: systemPrompt }, { role: "user", text: userPrompt }]
       }),
     });
