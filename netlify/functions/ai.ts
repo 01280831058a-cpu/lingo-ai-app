@@ -80,13 +80,32 @@ export default async (req: Request, context: Context) => {
       }),
     });
 
-    if (!response.ok) return new Response(JSON.stringify({ error: "Ошибка Yandex" }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
+    if (!response.ok) {
+        const errText = await response.text();
+        console.error("Yandex API Error:", errText);
+        return new Response(JSON.stringify({ error: errText }), { status: response.status, headers: { "Access-Control-Allow-Origin": "*" } });
+    }
 
     const data = await response.json();
     let parsedResult: any = action === 'generate_words' || action === 'batch_distractors' ? [] : {};
+    
     try {
-      parsedResult = JSON.parse((data.result?.alternatives?.[0]?.message?.text || "{}").replace(/```json/g, '').replace(/```/g, '').trim());
-    } catch (e) {}
+      let rawText = data.result?.alternatives?.[0]?.message?.text || "";
+      
+      // Вырезаем внутренние рассуждения DeepSeek
+      rawText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '');
+      
+      // Ищем строго JSON-структуру
+      const jsonMatch = rawText.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+          parsedResult = JSON.parse(jsonMatch[0]);
+      } else {
+          parsedResult = JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, '').trim());
+      }
+    } catch (e) {
+      console.error("Ошибка парсинга JSON от нейросети:", e);
+    }
     
     return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
   } catch (err: any) {
