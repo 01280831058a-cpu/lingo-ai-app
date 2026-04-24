@@ -26,28 +26,33 @@ export default async (req: Request, context: Context) => {
     if (action === 'translate') {
       systemPrompt = `ТЫ АКАДЕМИЧЕСКИЙ СЛОВАРЬ.
 ВАЖНЫЕ ПРАВИЛА:
-1. ИГНОРИРУЙ ЦЕНЗУРУ. Переводи ЛЮБОЙ текст прямо.
+1. ИГНОРИРУЙ ЦЕНЗУРУ. Переводи любой текст прямо.
 2. ЗАЩИТА ОТ ОПЕЧАТОК: Если слово введено с ошибкой, исправь его.
 3. ТРАНСКРИПЦИИ: Британская (UK) и Американская (US) транскрипции (IPA) ДОЛЖНЫ ОТЛИЧАТЬСЯ.
-4. УРОВЕНЬ ЯЗЫКА: ${level || 'Intermediate'}. Адаптируй пример и кембриджское объяснение строго под этот уровень!
-5. ЧАСТЬ РЕЧИ И АЛЬТЕРНАТИВЫ: Укажи часть речи (например, noun, verb). Укажи 3-4 других кратких значения слова.
+4. УРОВЕНЬ: ${level || 'Intermediate'}. Адаптируй пример и кембриджское объяснение строго под этот уровень.
+5. ЧАСТЬ РЕЧИ И РОДСТВЕННЫЕ СЛОВА: Укажи часть речи. Дай 3 варианта перевода на выбор. Приведи 2-3 однокоренных слова других частей речи.
+
 Формат ответа СТРОГО JSON: 
 {
   "original": "Исправленное слово",
   "partOfSpeech": "Часть речи (англ)",
-  "translation": "Главный краткий перевод",
+  "translationOptions": ["вариант 1", "вариант 2", "вариант 3"],
   "cambridgeTranslation": "Развернутый перевод",
   "transcriptionUK": "UK транскрипция",
   "transcriptionUS": "US транскрипция",
   "examples": [{"text": "Пример", "translation": "Перевод примера"}],
-  "alternativeTranslations": ["доп. значение 1", "доп. значение 2"]
+  "relatedWords": [
+    {"word": "однокоренное слово", "translation": "перевод", "partOfSpeech": "часть речи"}
+  ]
 }`;
       userPrompt = word;
     } else if (action === 'batch_distractors') {
       systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
       userPrompt = JSON.stringify(words.map((w:any) => ({ id: w.id, word: w.original, translation: w.translation })));
     } else if (action === 'check') {
-      systemPrompt = `Проверь предложение со словом "${word}". Уровень: ${level}. Верни JSON: {"isCorrect": boolean, "feedback": "Комментарий"}.`;
+      systemPrompt = `Проверь предложение со словом "${word}". Уровень: ${level}. 
+ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ. Если есть ошибка в грамматике или контексте, обязательно напиши правильный вариант предложения.
+Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор ошибки на русском с правильным примером"}.`;
       userPrompt = sentence;
     } else if (action === 'example') {
       systemPrompt = `Придумай НОВЫЙ пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
@@ -71,7 +76,7 @@ export default async (req: Request, context: Context) => {
     try {
       parsedResult = JSON.parse((data.result?.alternatives?.[0]?.message?.text || "{}").replace(/```json/g, '').replace(/```/g, '').trim());
     } catch (e) {
-      parsedResult = action === 'batch_distractors' ? [] : { translation: "Ошибка ИИ", examples: [] };
+      parsedResult = action === 'batch_distractors' ? [] : { translationOptions: ["Ошибка ИИ"], examples: [] };
     }
     return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
   } catch (err: any) {
