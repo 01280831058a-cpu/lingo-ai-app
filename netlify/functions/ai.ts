@@ -1,6 +1,7 @@
 import { Config, Context } from "@netlify/functions";
 
 export default async (req: Request, context: Context) => {
+  // Настройки CORS для работы из браузера
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -23,6 +24,7 @@ export default async (req: Request, context: Context) => {
     let systemPrompt = "";
     let userPrompt = "";
 
+    // 1. Промпт для генерации карточки слова
     if (action === 'translate') {
       systemPrompt = `ТЫ АКАДЕМИЧЕСКИЙ СЛОВАРЬ.
 ВАЖНЫЕ ПРАВИЛА:
@@ -46,14 +48,20 @@ export default async (req: Request, context: Context) => {
   ]
 }`;
       userPrompt = word;
+      
+    // 2. Промпт для викторины (пакетная генерация)
     } else if (action === 'batch_distractors') {
       systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
       userPrompt = JSON.stringify(words.map((w:any) => ({ id: w.id, word: w.original, translation: w.translation })));
+      
+    // 3. Промпт для проверки предложений
     } else if (action === 'check') {
       systemPrompt = `Проверь предложение со словом "${word}". Уровень: ${level}. 
 ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ. Если есть ошибка в грамматике или контексте, обязательно напиши правильный вариант предложения.
 Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор ошибки на русском с правильным примером"}.`;
       userPrompt = sentence;
+      
+    // 4. Промпт для перегенерации примера
     } else if (action === 'example') {
       systemPrompt = `Придумай НОВЫЙ пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
       userPrompt = word;
@@ -63,6 +71,7 @@ export default async (req: Request, context: Context) => {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Api-Key ${YANDEX_API_KEY}` },
       body: JSON.stringify({
+        // УСТАНОВЛЕНА ЛЕГКАЯ И ДЕШЕВАЯ МОДЕЛЬ ВЕЗДЕ
         modelUri: `gpt://${YANDEX_FOLDER_ID}/yandexgpt-lite/latest`, 
         completionOptions: { stream: false, temperature: 0.3, maxTokens: 2000 },
         messages: [{ role: "system", text: systemPrompt }, { role: "user", text: userPrompt }]
@@ -78,6 +87,7 @@ export default async (req: Request, context: Context) => {
     } catch (e) {
       parsedResult = action === 'batch_distractors' ? [] : { translationOptions: ["Ошибка ИИ"], examples: [] };
     }
+    
     return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
