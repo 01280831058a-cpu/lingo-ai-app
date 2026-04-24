@@ -14,8 +14,7 @@ export default async (req: Request, context: Context) => {
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  // 👇 ВСТАВЬ СЮДА СВОЙ НОВЫЙ КЛЮЧ (только английские буквы и цифры!)
-  const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2"; 
+  const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2";
   const YANDEX_FOLDER_ID = "b1g5hslgb02o872rtq1v";
 
   try {
@@ -72,10 +71,10 @@ export default async (req: Request, context: Context) => {
       headers: { 
         "Content-Type": "application/json", 
         "Authorization": `Api-Key ${YANDEX_API_KEY}`,
-        "x-folder-id": YANDEX_FOLDER_ID // 👈 Тот самый заголовок для сторонних моделей
+        "x-folder-id": YANDEX_FOLDER_ID
       },
       body: JSON.stringify({
-        model: `gpt://${YANDEX_FOLDER_ID}/qwen2.5-7b-instruct/`, 
+        model: `gpt://${YANDEX_FOLDER_ID}/qwen3-8b/latest`, 
         temperature: 0.3, 
         max_tokens: 2000,
         messages: [
