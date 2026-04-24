@@ -84,7 +84,7 @@ export default async (req: Request, context: Context) => {
         "x-folder-id": YANDEX_FOLDER_ID
       },
       body: JSON.stringify({
-        model: `gpt://${YANDEX_FOLDER_ID}/qwen3-8b/latest`, 
+        model: `gpt://${YANDEX_FOLDER_ID}/yandexgpt-lite/latest`, 
         temperature: 0.3, 
         max_tokens: 2000,
         messages: [
