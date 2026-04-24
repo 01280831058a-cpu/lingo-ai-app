@@ -1,6 +1,7 @@
 import { Config, Context } from "@netlify/functions";
 
 export default async (req: Request, context: Context) => {
+  // Обработка CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -14,8 +15,8 @@ export default async (req: Request, context: Context) => {
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  // ⚠️ ЗАМЕНИ НА НОВЫЙ КЛЮЧ
-  const YANDEX_API_KEY = "ТВОЙ_НОВЫЙ_СЕКРЕТНЫЙ_API_КЛЮЧ";
+  // Данные для авторизации
+  const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2"; 
   const YANDEX_FOLDER_ID = "b1g5hslgb02o872rtq1v";
 
   try {
@@ -24,6 +25,7 @@ export default async (req: Request, context: Context) => {
     let systemPrompt = "";
     let userPrompt = "";
 
+    // Логика формирования промптов
     if (action === 'translate') {
       systemPrompt = `ТЫ АКАДЕМИЧЕСКИЙ СЛОВАРЬ.
 ВАЖНЫЕ ПРАВИЛА:
@@ -50,50 +52,56 @@ export default async (req: Request, context: Context) => {
     } else if (action === 'generate_words') {
       systemPrompt = `Ты интеллектуальный помощник для изучения языков. Твоя задача - составить список из ${count} полезных английских слов.
 Уровень сложности слов должен строго соответствовать: ${level || 'Intermediate'}. 
-Если анализируешь текст и в нем нет достаточно сложных/простых слов, выбери наиболее близкие к этому уровню, которые есть.
-ОТВЕЧАЙ СТРОГО JSON МАССИВОМ: [{"word": "apple", "translation": "яблоко"}]. Никакого другого текста, никаких пояснений.`;
+ОТВЕЧАЙ СТРОГО JSON МАССИВОМ: [{"word": "apple", "translation": "яблоко"}]. Никакого другого текста.`;
       
-      if (text) {
-         userPrompt = `Выбери слова ИСКЛЮЧИТЕЛЬНО из этого текста, которые относятся к теме "${topic}" (или самые важные слова из текста, если тема пустая). Текст: ${text.substring(0, 3000)}`;
-      } else {
-         userPrompt = `Сгенерируй слова на тему: "${topic}".`;
-      }
+      userPrompt = text 
+        ? `Выбери слова ИСКЛЮЧИТЕЛЬНО из этого текста по теме "${topic}": ${text.substring(0, 3000)}`
+        : `Сгенерируй слова на тему: "${topic}".`;
     } else if (action === 'batch_distractors') {
-      systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском в нижнем регистре. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
+      systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
       userPrompt = JSON.stringify(words.map((w:any) => ({ id: w.id, word: w.original, translation: w.translation })));
     } else if (action === 'check') {
-      systemPrompt = `Проверь предложение со словом "${word}". 
-ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ. Если есть ошибка в грамматике или контексте, обязательно напиши правильный вариант предложения.
-Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор ошибки на русском с правильным примером"}.`;
+      systemPrompt = `Проверь предложение со словом "${word}". ОТВЕЧАЙ СТРОГО НА РУССКОМ. 
+Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор"}.`;
       userPrompt = sentence;
     } else if (action === 'example') {
-      systemPrompt = `Придумай НОВЫЙ пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
+      systemPrompt = `Придумай пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
       userPrompt = word;
     }
 
+    // Запрос к OpenAI-совместимому API Яндекса для сторонних моделей
     const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Api-Key ${YANDEX_API_KEY}` },
+      headers: { 
+        "Content-Type": "application/json", 
+        "Authorization": `Api-Key ${YANDEX_API_KEY}` 
+      },
       body: JSON.stringify({
-        // Укажи здесь точный URI легкой модели (например, qwen2.5-7b-instruct)
-        model: `gpt://${YANDEX_FOLDER_ID}/qwen2.5-7b-instruct/latest`, 
+        model: "gpt://b1g5hslgb02o872rtq1v/qwen2.5-7b-instruct/latest", 
         temperature: 0.3, 
         max_tokens: 2000,
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }]
+        messages: [
+          { role: "system", content: systemPrompt }, 
+          { role: "user", content: userPrompt }
+        ]
       }),
     });
 
     if (!response.ok) {
-        const errText = await response.text();
-        console.error("Yandex API Error:", errText);
-        return new Response(JSON.stringify({ error: errText }), { status: response.status, headers: { "Access-Control-Allow-Origin": "*" } });
+      const errText = await response.text();
+      return new Response(JSON.stringify({ error: errText }), { 
+        status: response.status, 
+        headers: { "Access-Control-Allow-Origin": "*" } 
+      });
     }
 
     const data = await response.json();
-    let parsedResult: any = action === 'generate_words' || action === 'batch_distractors' ? [] : {};
+    let parsedResult: any = (action === 'generate_words' || action === 'batch_distractors') ? [] : {};
     
     try {
       let rawText = data.choices?.[0]?.message?.content || "";
+      
+      // Удаляем возможные теги размышлений и лишний текст
       rawText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '');
       const jsonMatch = rawText.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
       
@@ -103,11 +111,17 @@ export default async (req: Request, context: Context) => {
           parsedResult = JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, '').trim());
       }
     } catch (e) {
-      console.error("Ошибка парсинга JSON от нейросети:", e);
+      console.error("Ошибка парсинга:", e);
     }
     
-    return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
+    return new Response(JSON.stringify(parsedResult), { 
+      status: 200, 
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
+    return new Response(JSON.stringify({ error: err.message }), { 
+      status: 500, 
+      headers: { "Access-Control-Allow-Origin": "*" } 
+    });
   }
 };
