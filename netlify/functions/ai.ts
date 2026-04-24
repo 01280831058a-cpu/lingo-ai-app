@@ -14,7 +14,7 @@ export default async (req: Request, context: Context) => {
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  const YANDEX_API_KEY = process.env.YANDEX_API_KEY;
+  const YANDEX_API_KEY = "AQVNzPJ6iodlRTq8wCYtzOvJL7cA4Q9A1u21VMp8";
   const YANDEX_FOLDER_ID = "b1g5hslgb02o872rtq1v";
 
   try {
