@@ -14,8 +14,8 @@ export default async (req: Request, context: Context) => {
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  const YANDEX_API_KEY = "AQVN050LifyouJDKmjXZRUh7n7WWQSa4w7nVCfhY";
-  const YANDEX_FOLDER_ID = "b1gt0i8u6inlaoafpmos";
+  const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2";
+  const YANDEX_FOLDER_ID = "b1g67303jj4e7qobjgdn";
 
   try {
     const { action = 'translate', word, words, sentence, topic, count, text, level } = await req.json();
