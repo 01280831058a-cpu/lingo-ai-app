@@ -7,7 +7,7 @@ export default async (req: Request, context: Context) => {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-folder-id",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
       },
     });
   }
@@ -49,74 +49,47 @@ export default async (req: Request, context: Context) => {
     } else if (action === 'generate_words') {
       systemPrompt = `Ты интеллектуальный помощник для изучения языков. Твоя задача - составить список из ${count} полезных английских слов.
 Уровень сложности слов должен строго соответствовать: ${level || 'Intermediate'}. 
-ОТВЕЧАЙ СТРОГО JSON МАССИВОМ: [{"word": "apple", "translation": "яблоко"}]. Никакого другого текста.`;
+Если анализируешь текст и в нем нет достаточно сложных/простых слов, выбери наиболее близкие к этому уровню, которые есть.
+ОТВЕЧАЙ СТРОГО JSON МАССИВОМ: [{"word": "apple", "translation": "яблоко"}]. Никакого другого текста, никаких пояснений.`;
       
-      userPrompt = text 
-        ? `Выбери слова ИСКЛЮЧИТЕЛЬНО из этого текста по теме "${topic}": ${text.substring(0, 3000)}`
-        : `Сгенерируй слова на тему: "${topic}".`;
+      if (text) {
+         userPrompt = `Выбери слова ИСКЛЮЧИТЕЛЬНО из этого текста, которые относятся к теме "${topic}" (или самые важные слова из текста, если тема пустая). Текст: ${text.substring(0, 3000)}`;
+      } else {
+         userPrompt = `Сгенерируй слова на тему: "${topic}".`;
+      }
     } else if (action === 'batch_distractors') {
-      systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
+      systemPrompt = `Создай викторину. Для каждого слова придумай 3 НЕПРАВИЛЬНЫХ перевода на русском в нижнем регистре. Верни СТРОГО JSON-массив: [{"id": "id", "distractors": ["в1", "в2", "в3"]}].`;
       userPrompt = JSON.stringify(words.map((w:any) => ({ id: w.id, word: w.original, translation: w.translation })));
     } else if (action === 'check') {
-      systemPrompt = `Проверь предложение со словом "${word}". ОТВЕЧАЙ СТРОГО НА РУССКОМ. 
-Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор"}.`;
+      systemPrompt = `Проверь предложение со словом "${word}". 
+ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ. Если есть ошибка в грамматике или контексте, обязательно напиши правильный вариант предложения.
+Верни JSON: {"isCorrect": boolean, "feedback": "Подробный разбор ошибки на русском с правильным примером"}.`;
       userPrompt = sentence;
     } else if (action === 'example') {
-      systemPrompt = `Придумай пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
+      systemPrompt = `Придумай НОВЫЙ пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
       userPrompt = word;
     }
 
-    const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
+    const response = await fetch("https://llm.api.cloud.yandex.net/foundationModels/v1/completion", {
       method: "POST",
-      headers: { 
-        "Content-Type": "application/json", 
-        "Authorization": `Api-Key ${YANDEX_API_KEY}`,
-        "x-folder-id": YANDEX_FOLDER_ID
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Api-Key ${YANDEX_API_KEY}` },
       body: JSON.stringify({
-        model: `gpt://${YANDEX_FOLDER_ID}/qwen3-8b/latest`, 
-        temperature: 0.3, 
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: systemPrompt }, 
-          { role: "user", content: userPrompt }
-        ]
+        modelUri: `gpt://${YANDEX_FOLDER_ID}/qwen3-8b/latest`, 
+        completionOptions: { stream: false, temperature: 0.3, maxTokens: 2000 },
+        messages: [{ role: "system", text: systemPrompt }, { role: "user", text: userPrompt }]
       }),
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return new Response(JSON.stringify({ error: errText }), { 
-        status: response.status, 
-        headers: { "Access-Control-Allow-Origin": "*" } 
-      });
-    }
+    if (!response.ok) return new Response(JSON.stringify({ error: "Ошибка Yandex" }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
 
     const data = await response.json();
-    let parsedResult: any = (action === 'generate_words' || action === 'batch_distractors') ? [] : {};
-    
+    let parsedResult: any = action === 'generate_words' || action === 'batch_distractors' ? [] : {};
     try {
-      let rawText = data.choices?.[0]?.message?.content || "";
-      rawText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '');
-      const jsonMatch = rawText.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
-      
-      if (jsonMatch) {
-          parsedResult = JSON.parse(jsonMatch[0]);
-      } else {
-          parsedResult = JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, '').trim());
-      }
-    } catch (e) {
-      console.error("Ошибка парсинга:", e);
-    }
+      parsedResult = JSON.parse((data.result?.alternatives?.[0]?.message?.text || "{}").replace(/```json/g, '').replace(/```/g, '').trim());
+    } catch (e) {}
     
-    return new Response(JSON.stringify(parsedResult), { 
-      status: 200, 
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
+    return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), { 
-      status: 500, 
-      headers: { "Access-Control-Allow-Origin": "*" } 
-    });
+    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
   }
 };
