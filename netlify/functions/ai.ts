@@ -14,6 +14,7 @@ export default async (req: Request, context: Context) => {
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
+  // ⚠️ ВАЖНО: Твой ключ засвечен! Обязательно удали этот ключ в Yandex Cloud и выпусти новый, иначе кто-то может потратить твои деньги!
   const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2";
   const YANDEX_FOLDER_ID = "b1g5hslgb02o872rtq1v";
 
@@ -70,13 +71,16 @@ export default async (req: Request, context: Context) => {
       userPrompt = word;
     }
 
-    const response = await fetch("https://llm.api.cloud.yandex.net/foundationModels/v1/completion", {
+    // ИСПОЛЬЗУЕМ ФОРМАТ OPENAI API КАК ПРОСИТ ЯНДЕКС
+    const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Api-Key ${YANDEX_API_KEY}` },
       body: JSON.stringify({
-        modelUri: `gpt://${YANDEX_FOLDER_ID}/deepseek-v32/latest`, 
-        completionOptions: { stream: false, temperature: 0.3, maxTokens: 2000 },
-        messages: [{ role: "system", text: systemPrompt }, { role: "user", text: userPrompt }]
+        model: `gpt://${YANDEX_FOLDER_ID}/deepseek-v32/latest`, 
+        temperature: 0.3, 
+        max_tokens: 2000,
+        // В OpenAI API используется слово 'content', а не 'text'
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }]
       }),
     });
 
@@ -90,14 +94,14 @@ export default async (req: Request, context: Context) => {
     let parsedResult: any = action === 'generate_words' || action === 'batch_distractors' ? [] : {};
     
     try {
-      let rawText = data.result?.alternatives?.[0]?.message?.text || "";
+      // В OpenAI API путь к тексту отличается
+      let rawText = data.choices?.[0]?.message?.content || "";
       
-      // Вырезаем внутренние рассуждения DeepSeek
+      // Защита от тегов <think> (мысли) у DeepSeek
       rawText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '');
       
-      // Ищем строго JSON-структуру
+      // Безопасный парсинг JSON
       const jsonMatch = rawText.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
-      
       if (jsonMatch) {
           parsedResult = JSON.parse(jsonMatch[0]);
       } else {
