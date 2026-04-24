@@ -75,7 +75,7 @@ export default async (req: Request, context: Context) => {
         "x-folder-id": YANDEX_FOLDER_ID // 👈 Тот самый заголовок для сторонних моделей
       },
       body: JSON.stringify({
-        model: `gpt://${YANDEX_FOLDER_ID}/qwen2.5-7b-instruct/latest`, 
+        model: `gpt://${YANDEX_FOLDER_ID}/qwen2.5-7b-instruct/`, 
         temperature: 0.3, 
         max_tokens: 2000,
         messages: [
