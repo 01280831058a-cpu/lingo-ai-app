@@ -74,7 +74,7 @@ export default async (req: Request, context: Context) => {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Api-Key ${YANDEX_API_KEY}` },
       body: JSON.stringify({
-        modelUri: `gpt://${YANDEX_FOLDER_ID}/qwen3-8b/latest`, 
+        modelUri: `gpt://${YANDEX_FOLDER_ID}/yandexgpt-5-lite/latest`, 
         completionOptions: { stream: false, temperature: 0.3, maxTokens: 2000 },
         messages: [{ role: "system", text: systemPrompt }, { role: "user", text: userPrompt }]
       }),
