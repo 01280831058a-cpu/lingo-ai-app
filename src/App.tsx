@@ -759,7 +759,7 @@ function GenerateWordsModal({ words, userProfile, groups, onClose, onSaveWord, o
   };
 
   const handleGenerate = async () => {
-     const c = Math.min(30, parseInt(count) || 10);
+     const c = Math.min(15, parseInt(count) || 10);
      if (!(topic || '').trim() && !(extractedText || '').trim()) return alert('Введите тему или загрузите файл');
      setLoading(true);
      const result = await ApiClient.aiGenerateWordsList(topic, c, extractedText, genLevel);
@@ -904,7 +904,7 @@ function GenerateWordsModal({ words, userProfile, groups, onClose, onSaveWord, o
                                  style={{ minHeight: '52px' }}
                              />
                          </div>
-                         <div className="col-span-1 space-y-1"><label className="text-[10px] font-bold text-stone-400 uppercase">Слов (макс 30)</label><input type="number" min="1" max="30" value={count} onChange={e => setCount(e.target.value)} className="w-full bg-stone-50 px-4 py-3 rounded-2xl border border-stone-200 outline-none focus:border-purple-500 font-bold" /></div>
+                         <div className="col-span-1 space-y-1"><label className="text-[10px] font-bold text-stone-400 uppercase">Слов (макс 15)</label><input type="number" min="1" max="30" value={count} onChange={e => setCount(e.target.value)} className="w-full bg-stone-50 px-4 py-3 rounded-2xl border border-stone-200 outline-none focus:border-purple-500 font-bold" /></div>
                       </div>
                       
                       <div className="space-y-1 mt-2">
