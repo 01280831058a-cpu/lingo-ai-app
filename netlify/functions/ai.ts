@@ -1,22 +1,21 @@
 import { Config, Context } from "@netlify/functions";
 
 export default async (req: Request, context: Context) => {
-  // Обработка CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, x-folder-id",
       },
     });
   }
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-  // Данные для авторизации
-  const YANDEX_API_KEY = "AQVN3zA-_6M0SamUMpiAmQ31UcetWW4v71hacoc2"; 
+  // 👇 ВСТАВЬ СЮДА СВОЙ НОВЫЙ КЛЮЧ (только английские буквы и цифры!)
+  const YANDEX_API_KEY = "ТВОЙ_НОВЫЙ_КЛЮЧ"; 
   const YANDEX_FOLDER_ID = "b1g5hslgb02o872rtq1v";
 
   try {
@@ -25,7 +24,6 @@ export default async (req: Request, context: Context) => {
     let systemPrompt = "";
     let userPrompt = "";
 
-    // Логика формирования промптов
     if (action === 'translate') {
       systemPrompt = `ТЫ АКАДЕМИЧЕСКИЙ СЛОВАРЬ.
 ВАЖНЫЕ ПРАВИЛА:
@@ -69,15 +67,15 @@ export default async (req: Request, context: Context) => {
       userPrompt = word;
     }
 
-    // Запрос к OpenAI-совместимому API Яндекса для сторонних моделей
     const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json", 
-        "Authorization": `Api-Key ${YANDEX_API_KEY}` 
+        "Authorization": `Api-Key ${YANDEX_API_KEY}`,
+        "x-folder-id": YANDEX_FOLDER_ID // 👈 Тот самый заголовок для сторонних моделей
       },
       body: JSON.stringify({
-        model: "gpt://b1g5hslgb02o872rtq1v/qwen2.5-7b-instruct/latest", 
+        model: `gpt://${YANDEX_FOLDER_ID}/qwen2.5-7b-instruct/latest`, 
         temperature: 0.3, 
         max_tokens: 2000,
         messages: [
@@ -100,8 +98,6 @@ export default async (req: Request, context: Context) => {
     
     try {
       let rawText = data.choices?.[0]?.message?.content || "";
-      
-      // Удаляем возможные теги размышлений и лишний текст
       rawText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '');
       const jsonMatch = rawText.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
       
