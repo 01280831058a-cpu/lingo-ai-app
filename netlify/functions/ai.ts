@@ -30,7 +30,7 @@ export default async (req: Request, context: Context) => {
 2. ЗАЩИТА ОТ ОПЕЧАТОК: Если слово введено с ошибкой, исправь его. Оригинал и переводы должны быть в нижнем регистре.
 3. ТРАНСКРИПЦИИ: Британская (UK) и Американская (US) транскрипции (IPA) ДОЛЖНЫ ОТЛИЧАТЬСЯ.
 4. УРОВЕНЬ: ${level || 'Intermediate'}. Адаптируй пример и кембриджское объяснение строго под этот уровень.
-5. ЧАСТЬ РЕЧИ И РОДСТВЕННЫЕ СЛОВА: Укажи часть речи. Дай 3 варианта перевода на выбор. Приведи 2-3 однокоренных слова других частей речи.
+5. ЧАСТЬ РЕЧИ И РОДСТВЕННЫЕ СЛОВА: ОБЯЗАТЕЛЬНО укажи часть речи. Дай 3 варианта перевода на выбор. ОБЯЗАТЕЛЬНО Приведи 2-3 однокоренных слова других частей речи в массиве "relatedWords".
 
 Формат ответа СТРОГО JSON: 
 {
@@ -86,9 +86,8 @@ export default async (req: Request, context: Context) => {
     let parsedResult: any = action === 'generate_words' || action === 'batch_distractors' ? [] : {};
     try {
       parsedResult = JSON.parse((data.result?.alternatives?.[0]?.message?.text || "{}").replace(/```json/g, '').replace(/```/g, '').trim());
-    } catch (e) {
-      // Игнорируем ошибку парсинга
-    }
+    } catch (e) {}
+    
     return new Response(JSON.stringify(parsedResult), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
