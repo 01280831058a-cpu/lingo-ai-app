@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  /* Zine Colors */
+  --color-punk-bg: #1E1B24;
+  --color-punk-paper: #F2EDE4;
+  --color-punk-paper-alt: #E0D8C3;
+  --color-punk-green: #88D64F;
+  --color-punk-purple: #A235D8;
+  --color-punk-orange: #D99C3B;
+  --color-punk-black: #111111;
+}
+
+body {
+  background-color: var(--color-punk-bg);
+  color: var(--color-punk-paper);
+  font-family: 'Space Mono', monospace;
+  /* CSS-текстура шума поверх черного фона */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.08'/%3E%3C/svg%3E");
+}
+
+/* ГЛОБАЛЬНЫЕ СТИЛИ ЭФФЕКТОВ (DIY/ZINE) */
+
+.font-marker {
+  font-family: 'Permanent Marker', cursive;
+}
+
+/* Эффект вырезанной бумаги для карточек */
+.zine-card {
+  background-color: var(--color-punk-paper);
+  color: var(--color-punk-black);
+  border: 3px solid var(--color-punk-black);
+  box-shadow: 6px 6px 0px var(--color-punk-black);
+  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+/* Физический отклик: проминается при нажатии */
+.zine-card:active, .zine-btn:active {
+  transform: translate(4px, 4px) !important;
+  box-shadow: 2px 2px 0px var(--color-punk-black) !important;
+}
+
+/* Эффект стикера для кнопок и инпутов */
+.zine-btn {
+  border: 3px solid var(--color-punk-black);
+  box-shadow: 4px 4px 0px var(--color-punk-black);
+  border-radius: 15px 225px 15px 255px / 255px 15px 225px 15px;
+  transition: transform 0.1s, box-shadow 0.1s;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.zine-input {
+  border: 3px solid var(--color-punk-black);
+  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  background-color: #fff;
+  color: var(--color-punk-black);
+}
+
+.zine-input:focus {
+  background-color: var(--color-punk-paper-alt);
+  outline: none;
+}
+
+/* Скрываем скроллбар для эстетики */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
