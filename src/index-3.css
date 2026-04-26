@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Nunito', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background-color: #FEFDF8; /* Светлый, теплый бумажный фон */
+  color: #1C1C1B;
+  font-family: 'Nunito', sans-serif;
+  /* Отключаем резинку при скролле на мобилках, чтобы приложение ощущалось нативным */
+  overscroll-behavior-y: none; 
+}
+
+/* Прячем системные скроллбары для красоты */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
