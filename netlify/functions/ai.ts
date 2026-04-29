@@ -32,7 +32,7 @@ export default async (req: Request, context: Context) => {
       params.append('folderId', YANDEX_FOLDER_ID);
       params.append('format', 'mp3');
 
-      const ttsRes = await fetch("https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize", {
+      const ttsRes = await fetch("[https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize](https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize)", {
         method: "POST",
         headers: { "Authorization": `Api-Key ${YANDEX_API_KEY}` },
         body: params
@@ -52,11 +52,9 @@ export default async (req: Request, context: Context) => {
     let userPrompt = "";
     let transcriptForSpeaking = "";
 
-    // === НОВЫЙ БЛОК: РАСПОЗНАВАНИЕ И АНАЛИЗ РЕЧИ ===
     if (action === 'analyze_speech') {
-      // 1. Отправляем аудио в Yandex SpeechKit (STT)
       const audioBuffer = Buffer.from(audio, 'base64');
-      const sttRes = await fetch("https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US", {
+      const sttRes = await fetch("[https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US](https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US)", {
         method: "POST",
         headers: { 
           "Authorization": `Api-Key ${YANDEX_API_KEY}`
@@ -76,7 +74,6 @@ export default async (req: Request, context: Context) => {
         return new Response(JSON.stringify({ transcript: "", feedback: "Не удалось распознать речь. Попробуйте говорить громче и четче." }), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
       }
 
-      // 2. Формируем промпт для GPT с учетом уровня студента
       systemPrompt = `Ты опытный преподаватель и экзаменатор английского языка. 
 Уровень студента: ${level || 'Intermediate'}.
 Тема его монолога: "${topic}".
@@ -85,7 +82,6 @@ export default async (req: Request, context: Context) => {
 {"feedback": "Твой подробный, дружелюбный и структурированный разбор на русском языке."}`;
       userPrompt = transcriptForSpeaking;
     } 
-    // Существующие режимы
     else if (action === 'translate') {
       systemPrompt = `ТЫ АКАДЕМИЧЕСКИЙ СЛОВАРЬ.
 ВАЖНЫЕ ПРАВИЛА:
@@ -129,7 +125,7 @@ export default async (req: Request, context: Context) => {
       userPrompt = word;
     }
 
-    const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
+    const response = await fetch("[https://llm.api.cloud.yandex.net/v1/chat/completions](https://llm.api.cloud.yandex.net/v1/chat/completions)", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json", 
@@ -163,12 +159,14 @@ export default async (req: Request, context: Context) => {
       if (jsonMatch) {
           parsedResult = JSON.parse(jsonMatch[0]);
       } else {
-          parsedResult = JSON.parse(rawText.replace(/```json/g, '').replace(/
-```/g, '').trim());
+          let cleanedText = rawText.replace(/```json/gi, '');
+          cleanedText = cleanedText.replace(/```/g, '');
+          parsedResult = JSON.parse(cleanedText.trim());
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error(e);
+    }
 
-    // Добавляем текст речи в финальный ответ
     if (action === 'analyze_speech') {
         parsedResult.transcript = transcriptForSpeaking;
     }
