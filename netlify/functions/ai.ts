@@ -22,7 +22,7 @@ export default async (req: Request, context: Context) => {
   }
 
   try {
-    const { action = 'translate', word, words, sentence, topic, count, text, level, audio } = await req.json();
+    const { action = 'translate', word, words, sentence, topic, count, text, level, audio, mimeType } = await req.json();
 
     if (action === 'tts') {
       const params = new URLSearchParams();
@@ -32,7 +32,6 @@ export default async (req: Request, context: Context) => {
       params.append('folderId', YANDEX_FOLDER_ID);
       params.append('format', 'mp3');
 
-      // Fixed: Plain string URL, no markdown
       const ttsRes = await fetch("https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize", {
         method: "POST",
         headers: { "Authorization": `Api-Key ${YANDEX_API_KEY}` },
@@ -53,25 +52,45 @@ export default async (req: Request, context: Context) => {
     let userPrompt = "";
     let transcriptForSpeaking = "";
 
+    // Используем Yandex SpeechKit API v3, который поддерживает формат WEBM из браузеров
     if (action === 'analyze_speech') {
-      const audioBuffer = Buffer.from(audio, 'base64');
-      
-      // Fixed: Plain string URL, no markdown
-      const sttRes = await fetch("https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US", {
-        method: "POST",
-        headers: { 
-          "Authorization": `Api-Key ${YANDEX_API_KEY}`
-        },
-        body: audioBuffer
+      let containerType = "WEBM";
+      if ((mimeType || '').includes('ogg')) containerType = "OGG_OPUS";
+      else if ((mimeType || '').includes('mp3')) containerType = "MP3";
+
+      const sttBody = {
+         audioContent: audio,
+         recognitionModel: {
+            model: "general",
+            audioFormat: {
+               containerAudio: {
+                  containerAudioType: containerType
+               }
+            },
+            languageRestriction: {
+               restrictionType: "WHITELIST",
+               languageCode: ["en-US"]
+            }
+         }
+      };
+
+      const sttRes = await fetch("https://stt.api.cloud.yandex.net/speech/v3/stt:recognize", {
+         method: "POST",
+         headers: { 
+            "Authorization": `Api-Key ${YANDEX_API_KEY}`,
+            "Content-Type": "application/json"
+         },
+         body: JSON.stringify(sttBody)
       });
 
       if (!sttRes.ok) {
-        const errText = await sttRes.text();
-        return new Response(JSON.stringify({ error: "STT Error: " + errText }), { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
+         const errText = await sttRes.text();
+         // Возвращаем ошибку так, чтобы фронтенд мог ее прочитать, не ломая UI
+         return new Response(JSON.stringify({ transcript: "", feedback: `Ошибка распознавания речи: ${errText}` }), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
       }
 
       const sttData = await sttRes.json();
-      transcriptForSpeaking = sttData.result || "";
+      transcriptForSpeaking = sttData.result?.alternatives?.[0]?.text || "";
 
       if (!transcriptForSpeaking) {
         return new Response(JSON.stringify({ transcript: "", feedback: "Не удалось распознать речь. Попробуйте говорить громче и четче." }), { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
@@ -126,9 +145,14 @@ export default async (req: Request, context: Context) => {
     } else if (action === 'example') {
       systemPrompt = `Придумай пример со словом "${word}" для уровня ${level}. Верни JSON: {"text": "Пример", "translation": "Перевод"}.`;
       userPrompt = word;
+    } else if (action === 'generate_topic') {
+      systemPrompt = `Ты экзаменатор IELTS/TOEFL. Сгенерируй ОДНУ интересную тему для монолога (на 1-2 минуты) на английском языке.
+Уровень студента: ${level || 'Intermediate'}.
+Тема должна быть сформулирована на английском языке (например: "Describe a memorable trip..." или "What are the pros and cons of remote work?").
+Верни СТРОГО JSON: {"topic": "текст темы"}. Никаких других слов.`;
+      userPrompt = "Сгенерируй случайную тему для спикинга.";
     }
 
-    // Fixed: Plain string URL, no markdown
     const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
       method: "POST",
       headers: { 
