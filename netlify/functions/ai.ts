@@ -32,7 +32,8 @@ export default async (req: Request, context: Context) => {
       params.append('folderId', YANDEX_FOLDER_ID);
       params.append('format', 'mp3');
 
-      const ttsRes = await fetch("[https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize](https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize)", {
+      // Fixed: Plain string URL, no markdown
+      const ttsRes = await fetch("https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize", {
         method: "POST",
         headers: { "Authorization": `Api-Key ${YANDEX_API_KEY}` },
         body: params
@@ -54,7 +55,9 @@ export default async (req: Request, context: Context) => {
 
     if (action === 'analyze_speech') {
       const audioBuffer = Buffer.from(audio, 'base64');
-      const sttRes = await fetch("[https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US](https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US)", {
+      
+      // Fixed: Plain string URL, no markdown
+      const sttRes = await fetch("https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=en-US", {
         method: "POST",
         headers: { 
           "Authorization": `Api-Key ${YANDEX_API_KEY}`
@@ -125,7 +128,8 @@ export default async (req: Request, context: Context) => {
       userPrompt = word;
     }
 
-    const response = await fetch("[https://llm.api.cloud.yandex.net/v1/chat/completions](https://llm.api.cloud.yandex.net/v1/chat/completions)", {
+    // Fixed: Plain string URL, no markdown
+    const response = await fetch("https://llm.api.cloud.yandex.net/v1/chat/completions", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json", 
